@@ -1,0 +1,14 @@
+<!--
+ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ SPDX-License-Identifier: Apache-2.0
+-->
+<library path="isaac_ros_deploy_ros2_control_hardware">
+  <class name="isaac_ros_deploy_ros2_control/TopicSensorInterface"
+         type="isaac_ros_deploy_ros2_control::hardware::TopicSensorInterface"
+         base_class_type="hardware_interface::SensorInterface">
+    <description>
+      Hardware interface that subscribes to a Float64 topic and exposes it as a state interface.
+      Useful for receiving scalar inputs from ROS topics.
+    </description>
+  </class>
+</library>

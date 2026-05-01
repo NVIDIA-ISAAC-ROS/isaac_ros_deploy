@@ -1,0 +1,114 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Multi-model test configuration for the inference graph pipeline.
+#
+# Model A: ao1 = ao2 = ai1 + ai2 + ai3
+# Model B: bo1 = bo2 = bo3 = bi1 + bi2
+#
+# Connections:
+#   - joint position input -> ai1          (dangling input)
+#   - ao2 -> ai2                           (feedback, same model)
+#   - bo3 -> ai3                           (feedback, cross-model)
+#   - ao1 -> bi1                           (data flow, cross-model)
+#   - bo2 -> bi2                           (feedback, same model)
+#   - bo1 -> joint command output          (dangling output)
+#
+# Expected output (bo1) for input P=1.0 over 5 iterations: [1, 4, 12, 33, 88]
+
+models:
+  model_a:
+    formatting:
+      input_format: [ai1, ai2, ai3]
+      output_format:
+        ao1: ao1
+        ao2: ao2
+
+    inputs:
+    - name: ai1
+      kind: state/joint/position
+      shape: [1, 1]
+      type: tensor
+      element_names: [[], [test_joint]]
+
+    - name: ai2
+      kind: feedback/ao2
+      shape: [1, 1]
+      type: tensor
+
+    - name: ai3
+      kind: feedback/bo3
+      shape: [1, 1]
+      type: tensor
+
+    outputs:
+    - name: ao1
+      kind: ao1
+      shape: [1, 1]
+      type: tensor
+
+    - name: ao2
+      kind: ao2
+      shape: [1, 1]
+      type: tensor
+
+    parameters:
+      model_path: model_a.onnx
+      backend: triton
+      device: cuda
+
+  model_b:
+    formatting:
+      input_format: [bi1, bi2]
+      output_format:
+        bo1: bo1
+        bo2: bo2
+        bo3: bo3
+
+    inputs:
+    - name: bi1
+      kind: data_flow/ao1
+      shape: [1, 1]
+      type: tensor
+
+    - name: bi2
+      kind: feedback/bo2
+      shape: [1, 1]
+      type: tensor
+
+    outputs:
+    - name: bo1
+      kind: joint_pos_targets
+      shape: [1, 1]
+      type: tensor
+      element_names: [[], [test_joint]]
+
+    - name: bo2
+      kind: bo2
+      shape: [1, 1]
+      type: tensor
+
+    - name: bo3
+      kind: bo3
+      shape: [1, 1]
+      type: tensor
+
+    parameters:
+      model_path: model_b.onnx
+      backend: triton
+      device: cuda
+
+pipeline:
+  inputs:
+    model_a: [ai1]
+
+  outputs:
+    model_b: [bo1]
+
+  feedback_connections:
+    model_a/ao2: [model_a/ai2]
+    model_b/bo3: [model_a/ai3]
+    model_b/bo2: [model_b/bi2]
+
+  data_flow:
+    model_a/ao1: [model_b/bi1]

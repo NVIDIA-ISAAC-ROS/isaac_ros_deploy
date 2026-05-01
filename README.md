@@ -1,154 +1,79 @@
-# __NVIDIA_OSS__ Standard Repo Template
+# Isaac ROS Deploy
 
-This README file is from the NVIDIA_OSS standard repo template of [PLC-OSS-Template](https://github.com/NVIDIA-GitHub-Management/PLC-OSS-Template?tab=readme-ov-file). It provides a list of files in the PLC-OSS-Template and guidelines on how to use (clone and customize) them.
+ROS 2 packages for deploying neural network policies trained in NVIDIA Isaac Lab on real and simulated robots.
 
-**Upon completing the customization for the project repo, the repo admin should replace this README template with the project specific README file.**
+## Overview
 
-- Files (org-wide templates in the NVIDIA .github org repo; per-repo overrides allowed) in [PLC-OSS-Template](https://github.com/NVIDIA-GitHub-Management/PLC-OSS-Template?tab=readme-ov-file)
+Isaac ROS Deploy provides ROS 2 packages for deploying
+neural network policies trained in NVIDIA Isaac Lab on real and simulated robots.
 
-   - Root 
-     - README.md skeleton (CTA + Quickstart + Support/Security/Governance links) 
-     - LICENSE (Apache 2.0 by default)
-        - For other licenses, see the [Confluence page](https://confluence.nvidia.com/pages/viewpage.action?pageId=788418816) for other licenses
-        - CLA.md file (delete if not using MIT or BSD licenses)
-     - CODE_OF_CONDUCT.md 
-     - SECURITY.md (vuln reporting path) 
-     - CONTRIBUTING.md (base; repo can add specifics)
-     - SUPPORT.md (Support levels/channels)
-     - GOVERNANCE.md (baseline; repo may extend)
-     - CITATION.md (for projects that need citation)
+It loads exported ONNX models, runs inference at control-loop rates, and applies safety
+constraints to the outputs. The deployment pipeline has three stages:
 
-   - .github/ 
-     - ISSUE_TEMPLATE/ (<https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository>)
-       - bug.yml, feature.yml, task.yml, config.yml 
-     - PULL_REQUEST_TEMPLATE.md (<https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository>)
-     - workflows/
-     - Note: workflow-templates/ for starter workflows should live in the org-level .github repo, not per-repo
+1. **Export**: Uses LEAPP to export policies from a Python training setup. LEAPP generates
+   a graph of neural network models (e.g., ONNX) together with a YAML metadata file
+   describing the topology and expected format of model inputs/outputs.
+2. **Runtime**: Isaac ROS Deploy loads the exported LEAPP graph and metadata and runs
+   inference. Using the metadata it can automatically connect the inference graph to the
+   right ROS topics and hardware interfaces.
+3. **Safety**: A safety controller wraps the runtime output to ensure safe operation. It
+   can blend policies for gradual enabling or detect and abort unsafe movements.
 
-   - Repo-specific (not org-template, maintained by the team)
-     - CODEOWNERS (place at .github/CODEOWNERS or repo root)
-     - CHANGELOG.md (or RELEASE.md) 
-     - ROADMAP.md 
-     - MAINTAINERS.md 
-     - NOTICE or THIRD_PARTY_NOTICES / THIRD_PARTY_LICENSES (dependency specific)
-     - Build/package files (CMake, pyproject, Dockerfile, etc.)
+Two runtimes are available:
 
-   - Recommended structure and hygiene
-     - docs/
-     - examples/
-     - tests/
-     - scripts/
-     - Container/dev env: Dockerfile, docker/, .devcontainer/ (optional)
-     - Build/package (language-specific):
-       - Python: pyproject.toml, setup.cfg/setup.py, requirements.txt, environment.yml
-       - C++: CMakeLists.txt, cmake/, vcpkg.json
-     - Repo hygiene: .gitignore, .gitattributes, .editorconfig, .pre-commit-config.yaml, .clang-format
+`ros2_control`:
+: Runs inside the ros2_control update loop, reading joint positions, velocities, and IMU
+  data directly from hardware state interfaces. Preferred for proprioceptive-only policies
+  needing strict real-time deterministic timing.
 
+`ros2_nodes`:
+: Uses Triton Inference Server ensemble to run all models from the LEAPP graph. All
+  inputs/outputs flow via ROS topics. Supports multi-model LEAPP graphs and feedback
+  self-loops.
 
-## Usage of [PLC-OSS-Template](https://github.com/NVIDIA-GitHub-Management/PLC-OSS-Template?tab=readme-ov-file) for NEW NVIDIA OSS repos
+The repository currently contains the following packages:
 
-1. Clone the [PLC-OSS-Template](https://github.com/NVIDIA-GitHub-Management/PLC-OSS-Template?tab=readme-ov-file)
-2. Find/replace all in the clone of `___PROJECT___` and `__PROJECT_NAME__` with the name of the specific project.
-3. Inspect all files to make sure all replacements work and update text as needed
+`isaac_deploy_core`:
+: Standalone C++ library with no ROS dependencies. Provides the core inference controller,
+  input/output builders, safety controller, and inference runner abstractions. Real-time
+  safe after activation (no allocations in hot path).
 
+`isaac_ros_deploy_ros2_control`:
+: ROS 2 controllers that wrap the core library for use with ros2_control. Includes
+  `InferenceController`, `SafetyController`, `FreezeController`,
+  `DisableController`, and `ImpedanceController`.
 
-**What you can reuse immediately**
-- CODE_OF_CONDUCT.md
-- SECURITY.md
-- CONTRIBUTING.md (base)
-- .github/ISSUE_TEMPLATE/.yml (bug/feature/task + config.yml)
-- .github/PULL_REQUEST_TEMPLATE.md
-- Reusable workflows 
+`isaac_ros_deploy_converters`:
+: Composable ROS 2 nodes (`InputBuilderNode`, `OutputBuilderNode`) and message
+  converters for the ros2_nodes runtime.
 
-**What you must customize per repo**
-- README.md: copy the skeleton and fill in product-specific details (Quickstart, Requirements, Usage, Support level, links)
-- LICENSE: check file is correct, update year, consult Confluence for alternatives https://confluence.nvidia.com/pages/viewpage.action?pageId=788418816, add CLA.md only if your license/process requires it
-- CODEOWNERS: replace <TEAM> with your GitHub team handle(s). Place at .github/CODEOWNERS (or repo root)
-- MAINTAINERS.md: list maintainers names/roles, escalation path
-- CHANGELOG.md (or RELEASE.md): track releases/changes
-- SUPPORT.md: Update for your project
-- ROADMAP.md (optional): upcoming milestones
-- NOTICE / THIRD_PARTY_NOTICES (if you ship third‑party content)
-- Build/package files (CMake/pyproject/Dockerfile/etc.), tests/, docs/, examples/, scripts/ as appropriate
-- Workflows: Edit if you need custom behavior 
+`isaac_ros_deploy_bringup`:
+: Launch files for the ros2_nodes inference pipeline.
 
+> [!Warning]
+> Before using Isaac ROS Deploy to control a robot, please read and familiarize yourself
+> with the safety information provided by your robot manufacturer.
 
-4. Change git origin to point to new repo and push
-5. Remove the line break below and everything above it
+> Best practices:
 
-## Usage for existing NVIDIA OSS repos
+> 1. Familiarize yourself with the location of the emergency stop buttons, and be prepared
+>    to apply if necessary.
+> 2. Before operation, ensure the working area is free of any persons or other potential
+>    hazards.
+> 3. Always start with `blend_ratio` at `0.0` and increase gradually.
+> 4. Test new policies in simulation (MuJoCo) before deploying on real hardware.
+> 5. Take extra caution when testing or deploying new features or code.
 
-1. Follow the steps above, but add the files to your existing repo and merge
+---
 
-<!-- REMOVE THE LINE BELOW AND EVERYTHING ABOVE -->
------------------------------------------
-# [Project Title]
-One-sentence value proposition for users. Who is it for, and why it matters. 
+## Documentation
 
-# Overview
-What the project does? Why the project is useful?
-Provide a brief overview, highlighting key features or problem-solving capabilities.
+Please visit the Isaac ROS Documentation to learn how to use this repository.
 
-# Getting Started
-Guide users on how they can get started with the project. This should include basic installation step, quick-start examples 
-```bash
-# Option A: Package manager (pip/conda/npm/etc.)
-<copy-paste install>
+---
 
-# Option B: Container
-docker run <image> <args>
+## Packages
 
-# Verify (hello world)
-<one-liner or ~10-line example>
-```
-# Requirements
-Include a list of pre-requisites. 
-- OS/Arch: <summary or link to full matrix>
-- Runtime/Compiler: <versions>
-- GPU/Drivers (if applicable): CUDA <ver>, driver <ver>, etc.
+## Latest
 
-# Usage
-```bash
-# Minimal runnable snippet (≤20 lines)
-<code>
-```
-- More examples/tutorials: <link>
-- API reference: <link>
-
-# Performance (Optional)
-Summary of benchmarks; link to detailed results and hardware used.
-
-## Releases & Roadmap 
-- Releases/Changelog: <link>
-- (Optional) Next milestones or link to `ROADMAP.md`.
-  
-# Contribution Guidelines
-- Start here: `CONTRIBUTING.md`
-- Code of Conduct: `CODE_OF_CONDUCT.md`
-- Development quickstart (build/test):
-```bash
-<clone> && <deps> && <build/test>
-```
-## Governance & Maintainers
-- Governance: `GOVERNANCE.md`
-- Maintainers: <team/handles>
-- Labeling/triage policy: <link>
-
-## Security
-- Vulnerability disclosure: `SECURITY.md`
-- Do not file public issues for security reports.
-
-## Support
-- Level: <Experimental | Maintained | Stable>
-- How to get help: Issues/Discussions/<channel link>
-- Response expectations (if any).
-
-# Community
-Provide the channel for community communications.
-
-# References
-Provide a list of related references
-
-# License
-This project is licensed under the [NAME HERE] License - see the LICENSE.md file for details
-- License: <link>
+Update 2026-04-30: Initial release

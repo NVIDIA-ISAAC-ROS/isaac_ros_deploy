@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Test configuration for inference controller
+models:
+  policy:
+    formatting:
+      input_format:
+      - input
+      output_format: output
+    inputs:
+    - name: input
+      kind: input
+      shape: [1, 3]
+      type: tensor
+    outputs:
+    - name: output
+      kind: output
+      shape: [1, 3]
+      type: tensor
+    parameters:
+      backend: mock
+      device: cpu
+pipeline:
+  inputs:
+    policy: [input]
+  outputs:
+    policy: [output]
+  data_flow: {}

@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Test configuration for the inference graph integration test.
+#
+# Inputs:
+#   - JointState (joint_pos, joint_vel) with joint reordering
+#   - Imu (body_rot, body_ang_vel) without reordering
+#   - Feedback (last_joint_pos from joint_pos_targets output)
+#
+# Outputs:
+#   - JointCommand (joint_pos_targets, joint_vel_targets)
+#   - BodyCommand (body_rot_target, body_ang_vel_target)
+
+# NN's internal joint order (used for input reordering and output names)
+nn_joint_order: &nn_order [joint_1, joint_2, joint_3]
+
+models:
+  test_pipeline:
+    formatting:
+      input_format:
+      - joint_pos
+      - joint_vel
+      - body_rot
+      - body_ang_vel
+      - last_joint_pos
+      output_format:
+        joint_pos_targets: joint_pos_targets
+        joint_vel_targets: joint_vel_targets
+        body_rot_target: body_rot_target
+        body_ang_vel_target: body_ang_vel_target
+    inputs:
+    - name: joint_pos
+      kind: state/joint/position
+      shape: [1, 3]
+      type: tensor
+      element_names: [[], *nn_order]
+
+    - name: joint_vel
+      kind: state/joint/velocity
+      shape: [1, 3]
+      type: tensor
+      element_names: [[], *nn_order]
+
+    - name: body_rot
+      kind: state/body/rotation
+      shape: [1, 4]
+      type: tensor
+      element_names: [[], [x, y, z, w]]
+
+    - name: body_ang_vel
+      kind: state/body/angular_velocity
+      shape: [1, 3]
+      type: tensor
+
+    - name: last_joint_pos
+      kind: last_actions
+      shape: [1, 3]
+      type: tensor
+
+    outputs:
+    - name: joint_pos_targets
+      kind: joint_pos_targets
+      shape: [1, 3]
+      type: tensor
+      element_names: [[], *nn_order]
+
+    - name: joint_vel_targets
+      kind: joint_vel_targets
+      shape: [1, 3]
+      type: tensor
+      element_names: [[], *nn_order]
+
+    - name: body_rot_target
+      kind: body_rot_target
+      shape: [1, 4]
+      type: tensor
+
+    - name: body_ang_vel_target
+      kind: body_ang_vel_target
+      shape: [1, 3]
+      type: tensor
+
+    parameters:
+      model_path: passthrough_model.onnx
+      backend: triton
+      device: cuda
+
+pipeline:
+  inputs:
+    test_pipeline:
+    - joint_pos
+    - joint_vel
+    - body_rot
+    - body_ang_vel
+  outputs:
+    test_pipeline:
+    - joint_pos_targets
+    - joint_vel_targets
+    - body_rot_target
+    - body_ang_vel_target
+  feedback_connections:
+    test_pipeline/joint_pos_targets: [test_pipeline/last_joint_pos]
+  data_flow: {}
