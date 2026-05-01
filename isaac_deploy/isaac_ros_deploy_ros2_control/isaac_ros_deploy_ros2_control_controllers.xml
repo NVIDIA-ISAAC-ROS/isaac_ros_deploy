@@ -1,0 +1,52 @@
+<!--
+ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ SPDX-License-Identifier: Apache-2.0
+-->
+<library path="isaac_ros_deploy_ros2_control_controllers">
+  <class name="isaac_ros_deploy_ros2_control/DisableController"
+         type="isaac_ros_deploy_ros2_control::controllers::DisableController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Controller that disables all joints by setting kp=0, kd=0.
+      The robot will collapse under gravity when this controller is active.
+    </description>
+  </class>
+
+  <class name="isaac_ros_deploy_ros2_control/FreezeController"
+         type="isaac_ros_deploy_ros2_control::controllers::FreezeController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Simple position-hold controller that captures joint positions at activation
+      and continuously commands those positions to hold the robot in place.
+    </description>
+  </class>
+
+  <class name="isaac_ros_deploy_ros2_control/ForwardJointCommandController"
+         type="isaac_ros_deploy_ros2_control::controllers::ForwardJointCommandController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Forwards joint commands to hardware interfaces. Subscribes to either
+      JointCommand (topic) or JointState (joint_state_topic) and writes
+      position, velocity, effort, kp, and kd to hardware command interfaces.
+    </description>
+  </class>
+
+  <class name="isaac_ros_deploy_ros2_control/InferenceController"
+         type="isaac_ros_deploy_ros2_control::controllers::InferenceController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Inference controller wrapping isaac_deploy_core::InferenceController.
+      Runs neural network policies with flexible input/output configuration.
+    </description>
+  </class>
+
+  <class name="isaac_ros_deploy_ros2_control/SafetyController"
+         type="isaac_ros_deploy_ros2_control::controllers::SafetyController"
+         base_class_type="controller_interface::ChainableControllerInterface">
+    <description>
+      Chainable safety controller wrapping isaac_deploy_core::SafetyController.
+      Applies blend ratio-based.
+    </description>
+  </class>
+
+</library>
