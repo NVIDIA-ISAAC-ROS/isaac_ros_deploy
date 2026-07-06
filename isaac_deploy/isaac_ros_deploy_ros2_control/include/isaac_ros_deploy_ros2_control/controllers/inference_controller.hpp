@@ -1,5 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #pragma once
 
@@ -11,9 +23,10 @@
 #include <controller_interface/controller_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <realtime_tools/realtime_buffer.hpp>
+#include <std_msgs/msg/bool.hpp>
 
-#include "isaac_deploy_core/core/types.h"
-#include "isaac_deploy_core/inference_controller/inference_controller.h"
+#include "isaac_deploy_core/core/types.hpp"
+#include "isaac_deploy_core/inference_controller/inference_controller.hpp"
 #include "isaac_ros_deploy_converters/converters/message_to_tensor_converter.hpp"
 
 namespace isaac_ros_deploy_ros2_control
@@ -89,6 +102,13 @@ private:
   // that converters can provide TensorSpecs with element names for reordering.
   // If there are no topic inputs, the core is activated immediately in on_activate().
   bool core_activated_{false};
+
+  // Latched `~/is_active` publisher that emits a single `std_msgs/Bool(true)`
+  // once `core_activated_` first flips true.  Tests poll this topic to
+  // distinguish "controller lifecycle active" from "policy is actually
+  // producing commands" (the latter is what AGILE needs to stabilise the
+  // robot before `reset_simulation`).
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr is_active_publisher_;
 
   // --- Topic-based input handling (reference motion, cmd_vel, etc.) ---
 

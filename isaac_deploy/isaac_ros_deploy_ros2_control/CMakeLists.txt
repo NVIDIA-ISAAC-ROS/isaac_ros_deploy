@@ -31,6 +31,7 @@ find_package(isaac_deploy_core REQUIRED)
 find_package(isaac_ros_deploy_converters REQUIRED)
 
 find_package(controller_interface REQUIRED)
+find_package(controller_manager_msgs REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
@@ -38,7 +39,9 @@ find_package(rclcpp_lifecycle REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(isaac_ros_deploy_interfaces REQUIRED)
 find_package(realtime_tools REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
+find_package(isaac_ros_inverse_dynamics REQUIRED)
 
 # LibTorch is provided by isaac_deploy_core via isaac_deploy_core-extras.cmake.
 # The Torch package is already found, and TORCH_INSTALL_PREFIX is set.
@@ -97,36 +100,19 @@ set_target_properties(velocity_threshold PROPERTIES
 # Safety Controller - Strategies
 # =============================================================================
 
-# clamp_velocity
-add_library(clamp_velocity SHARED
-  src/safety_controller/strategies/clamp_velocity.cpp
+# interpolate
+add_library(interpolate SHARED
+  src/safety_controller/strategies/interpolate.cpp
 )
-target_include_directories(clamp_velocity PUBLIC
+target_include_directories(interpolate PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(clamp_velocity PUBLIC
+target_link_libraries(interpolate PUBLIC
   safety_strategy
   ${TORCH_LIBRARIES}
 )
-set_target_properties(clamp_velocity PROPERTIES
-  INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
-  BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
-)
-
-# linear_interpolate
-add_library(linear_interpolate SHARED
-  src/safety_controller/strategies/linear_interpolate.cpp
-)
-target_include_directories(linear_interpolate PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-)
-target_link_libraries(linear_interpolate PUBLIC
-  safety_strategy
-  ${TORCH_LIBRARIES}
-)
-set_target_properties(linear_interpolate PROPERTIES
+set_target_properties(interpolate PROPERTIES
   INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
 )
@@ -148,8 +134,7 @@ target_link_libraries(safety_controller PUBLIC
   isaac_deploy_core::types
   isaac_deploy_core::expected
   velocity_threshold
-  clamp_velocity
-  linear_interpolate
+  interpolate
   yaml-cpp
 )
 set_target_properties(safety_controller PROPERTIES
@@ -193,19 +178,23 @@ add_library(isaac_ros_deploy_ros2_control_controllers SHARED
   src/controllers/freeze_controller.cpp
   src/controllers/forward_joint_command_controller.cpp
   src/controllers/inference_controller.cpp
+  src/controllers/joint_command_broadcaster.cpp
   src/controllers/safety_controller.cpp
+  src/utils/gain_utils.cpp
 )
 target_include_directories(isaac_ros_deploy_ros2_control_controllers PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(isaac_ros_deploy_ros2_control_controllers
+  controller_manager_msgs
   controller_interface
   hardware_interface
   pluginlib
   rclcpp
   rclcpp_lifecycle
   realtime_tools
+  sensor_msgs
   std_msgs
   isaac_ros_deploy_interfaces
   isaac_ros_deploy_converters
@@ -216,6 +205,7 @@ target_link_libraries(isaac_ros_deploy_ros2_control_controllers
   isaac_deploy_core::inference_controller
   isaac_ros_deploy_converters::converters
   safety_controller
+  isaac_ros_inverse_dynamics::inverse_dynamics_solver
   ${TORCH_LIBRARIES}
   yaml-cpp
 )
@@ -256,8 +246,7 @@ install(
     safety_strategy
     out_of_domain_detector
     velocity_threshold
-    clamp_velocity
-    linear_interpolate
+    interpolate
     safety_controller
     tensor_interface_utils
     isaac_ros_deploy_ros2_control_controllers
@@ -314,6 +303,7 @@ if(BUILD_TESTING)
   add_converter_test(test_converter_registry test/test_converter_registry.cpp)
   add_converter_test(test_state_interface_converters test/test_state_interface_converters.cpp)
   add_converter_test(test_command_interface_converters test/test_command_interface_converters.cpp)
+  add_converter_test(test_gain_utils test/test_gain_utils.cpp)
 
   # Safety controller tests.
   ament_add_gtest(velocity_threshold_test test/test_velocity_threshold.cpp)
@@ -323,16 +313,9 @@ if(BUILD_TESTING)
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )
 
-  ament_add_gtest(clamp_velocity_test test/test_clamp_velocity.cpp)
-  target_link_libraries(clamp_velocity_test clamp_velocity ${TORCH_LIBRARIES})
-  set_target_properties(clamp_velocity_test PROPERTIES
-    INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
-    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
-  )
-
-  ament_add_gtest(linear_interpolate_test test/test_linear_interpolate.cpp)
-  target_link_libraries(linear_interpolate_test linear_interpolate ${TORCH_LIBRARIES})
-  set_target_properties(linear_interpolate_test PROPERTIES
+  ament_add_gtest(interpolate_test test/test_interpolate.cpp)
+  target_link_libraries(interpolate_test interpolate ${TORCH_LIBRARIES})
+  set_target_properties(interpolate_test PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )
@@ -343,9 +326,60 @@ if(BUILD_TESTING)
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )
+
+  # Joint command broadcaster test.
+  ament_add_gtest(joint_command_broadcaster_test test/test_joint_command_broadcaster.cpp)
+  target_link_libraries(joint_command_broadcaster_test
+    isaac_ros_deploy_ros2_control_controllers
+    ${TORCH_LIBRARIES}
+  )
+  target_include_directories(joint_command_broadcaster_test PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(joint_command_broadcaster_test
+    controller_interface
+    hardware_interface
+    rclcpp
+    rclcpp_lifecycle
+    sensor_msgs
+  )
+  set_target_properties(joint_command_broadcaster_test PROPERTIES
+    INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  )
+
+  # ROS safety controller test.
+  ament_add_gtest(ros_safety_controller_test test/test_ros_safety_controller.cpp)
+  target_link_libraries(ros_safety_controller_test
+    isaac_ros_deploy_ros2_control_controllers
+    ${TORCH_LIBRARIES}
+  )
+  target_include_directories(ros_safety_controller_test PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(ros_safety_controller_test
+    controller_interface
+    controller_manager_msgs
+    hardware_interface
+    rclcpp
+    rclcpp_lifecycle
+  )
+  set_target_properties(ros_safety_controller_test PROPERTIES
+    INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  )
+
+  # ForwardJointCommandController trajectory-mode sampling smoke test.
+  ament_add_gtest(test_forward_joint_command_controller_trajectory
+    test/test_forward_joint_command_controller_trajectory.cpp)
+  ament_target_dependencies(test_forward_joint_command_controller_trajectory
+    rclcpp
+    isaac_ros_deploy_interfaces
+    isaac_deploy_core
+  )
 endif()
 
 ament_export_targets(isaac_ros_deploy_ros2_control_targets HAS_LIBRARY_TARGET)
-ament_export_dependencies(isaac_deploy_core yaml-cpp)
+ament_export_dependencies(isaac_deploy_core yaml-cpp isaac_ros_inverse_dynamics)
 
 ament_package()

@@ -1,12 +1,23 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "isaac_ros_deploy_ros2_control/safety_controller/safety_controller.hpp"
 
 #include <utility>
 
-#include "isaac_ros_deploy_ros2_control/safety_controller/strategies/clamp_velocity.hpp"
-#include "isaac_ros_deploy_ros2_control/safety_controller/strategies/linear_interpolate.hpp"
+#include "isaac_ros_deploy_ros2_control/safety_controller/strategies/interpolate.hpp"
 
 namespace isaac_deploy_core {
 
@@ -19,10 +30,8 @@ namespace isaac_deploy_core {
       const auto & blend_yaml = yaml["blend_ratio"];
       if (blend_yaml["type"]) {
         const std::string type_str = blend_yaml["type"].as < std::string > ();
-        if (type_str == "clamp_velocity") {
-          config.blend_ratio.type = BlendStrategy::kClampVelocity;
-        } else if (type_str == "linear_interpolate") {
-          config.blend_ratio.type = BlendStrategy::kLinearInterpolate;
+        if (type_str == "interpolate") {
+          config.blend_ratio.type = BlendStrategy::kInterpolate;
         } else if (type_str == "no_post_processing") {
           config.blend_ratio.type = BlendStrategy::kNoPostProcessing;
         } else {
@@ -79,19 +88,12 @@ namespace isaac_deploy_core {
         blend_strategy = nullptr;
         break;
 
-      case BlendStrategy::kClampVelocity: {
-          ClampVelocityConfig clamp_config {.max_velocities = config.blend_ratio.max_velocities};
-          auto result = ClampVelocity::create(clamp_config);
-          if (!result.has_value()) {
-            return tl::unexpected(result.error());
-          }
-          blend_strategy = std::move(*result);
-          break;
-        }
-
-      case BlendStrategy::kLinearInterpolate: {
-          LinearInterpolateConfig interp_config;
-          auto result = LinearInterpolate::create(interp_config);
+      case BlendStrategy::kInterpolate: {
+          InterpolateConfig interp_config {
+            .max_velocities = config.blend_ratio.max_velocities,
+            .default_position = config.blend_ratio.default_position,
+          };
+          auto result = Interpolate::create(interp_config);
           if (!result.has_value()) {
             return tl::unexpected(result.error());
           }

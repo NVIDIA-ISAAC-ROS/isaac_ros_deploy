@@ -1,6 +1,6 @@
 <!--
- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
- SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
 -->
 <library path="isaac_ros_deploy_ros2_control_controllers">
   <class name="isaac_ros_deploy_ros2_control/DisableController"
@@ -46,6 +46,17 @@
     <description>
       Chainable safety controller wrapping isaac_deploy_core::SafetyController.
       Applies blend ratio-based.
+    </description>
+  </class>
+
+  <class name="isaac_ros_deploy_ros2_control/JointCommandBroadcaster"
+         type="isaac_ros_deploy_ros2_control::controllers::JointCommandBroadcaster"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Broadcasts commanded joint values (position, velocity, effort, kp, kd)
+      as isaac_ros_deploy_interfaces/JointCommand for rosbag recording.
+      Reads command values from a chainable controller's reference interfaces
+      (exposed as read-only state interfaces).
     </description>
   </class>
 

@@ -68,7 +68,7 @@ The repository currently contains the following packages:
 
 ## Documentation
 
-Please visit the Isaac ROS Documentation to learn how to use this repository.
+Please visit the [Isaac ROS Documentation](https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_deploy/index.html) to learn how to use this repository.
 
 ---
 

@@ -1,5 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #pragma once
 
@@ -12,7 +24,7 @@
 
 #include "isaac_ros_tensor_list_interfaces/msg/tensor_list.hpp"
 
-#include "isaac_deploy_core/inference_controller/output/output_builder.h"
+#include "isaac_deploy_core/inference_controller/output/output_builder.hpp"
 
 #include "isaac_ros_deploy_converters/converters/tensor_to_message_converter.hpp"
 
@@ -34,12 +46,14 @@ struct OutputConverterEntry
 /// 3. Converts tensors to ROS messages using per-kind converters
 /// 4. Publishes to configured topics (JointCommand, etc.)
 ///
-/// Only outputs that have registered output converters (dangling outputs) are
-/// processed. State/feedback outputs are ignored.
+/// Only outputs that have registered output converters (i.e., external outputs
+/// that produce typed ROS messages) are processed. State/feedback outputs are
+/// ignored.
 ///
 /// Parameters:
 /// - config_path: Path to YAML configuration file
-/// - output_to_topic.<name>: Override output topic (defaults to output name)
+/// - output_to_topic.<name>: Override output topic.  The default is derived
+///   from the converter's ROS message type.
 /// - input_topic: Topic name for the input TensorList (default: "output_tensors")
 class OutputBuilderNode : public rclcpp::Node
 {
