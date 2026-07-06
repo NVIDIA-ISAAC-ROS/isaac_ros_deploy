@@ -2,8 +2,21 @@
 
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-"""Create a Triton ensemble model repository from a LEAPP YAML config.
+"""
+Create a Triton ensemble model repository from a LEAPP YAML config.
 
 This creates a directory layout like this:
 
@@ -19,9 +32,9 @@ This creates a directory layout like this:
 """
 
 import argparse
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+import shutil
 
 import onnx
 import yaml
@@ -122,7 +135,8 @@ def _generate_ensemble_config(
 
 
 def _has_dynamic_batch(onnx_path: Path) -> bool:
-    """Check if an ONNX model uses a dynamic (symbolic) batch dimension.
+    """
+    Check if an ONNX model uses a dynamic (symbolic) batch dimension.
 
     Inspects the first dimension of the first model input. If it has a
     symbolic name (e.g. 'batch_size'), the model uses dynamic batching.
@@ -140,12 +154,18 @@ def _generate_model_config(
     inputs: list[dict],
     outputs: list[dict],
     dynamic_batch: bool,
+    device: str = "cuda",
 ) -> str:
-    """Generate a Triton config.pbtxt for an ONNX model.
+    """
+    Generate a Triton config.pbtxt for an ONNX model.
 
     When ``dynamic_batch`` is True, the first dimension (batch) of every
     tensor is replaced with -1 so the config matches the ONNX model's
     dynamic batch dimension.
+
+    When ``device`` is ``"cpu"``, the model is placed on CPU via
+    ``instance_group``.  This is useful for small models (e.g. AGILE) that
+    are fast enough on CPU and should not compete for GPU with heavier models.
     """
     def _format_dims(shape: list[int]) -> str:
         dims = list(shape)
@@ -164,17 +184,23 @@ def _generate_model_config(
             for t in tensors
         )
 
+    instance_group = ""
+    if device.lower() == "cpu":
+        instance_group = "instance_group [{ kind: KIND_CPU }]\n\n"
+
     return (
         f'name: "{model_name}"\n'
         f'platform: "onnxruntime_onnx"\n'
         f"max_batch_size: 0\n\n"
+        + instance_group
         + _blocks("input", inputs)
         + _blocks("output", outputs)
     )
 
 
 def _resolve_model_path(config_path: Path, model_cfg: dict) -> Path:
-    """Resolve the ONNX model path from a model config entry.
+    """
+    Resolve the ONNX model path from a model config entry.
 
     If the model_path is relative, it is resolved relative to the config file.
     """
@@ -191,14 +217,14 @@ def _create_model_dir(
     output_dir: Path,
     config: dict,
 ) -> bool:
-    """Create a single Triton model directory inside a repo.
+    """
+    Create a single Triton model directory inside a repo.
 
     Generates the config.pbtxt and copies the ONNX model file. If the ONNX
     model uses a dynamic batch dimension, the first dim in config.pbtxt is
     set to -1 (using YAML shapes for the non-batch dimensions).
 
-    Returns:
-        True if the ONNX model uses dynamic batch dimensions.
+    Returns True if the ONNX model uses dynamic batch dimensions.
     """
     model_cfg = config["models"][model_name]
 
@@ -216,15 +242,19 @@ def _create_model_dir(
     # copied model.onnx.
     for data_file in onnx_model_path.parent.glob(f"{onnx_model_path.name}.*"):
         dest = version_dir / data_file.name
+        if dest.is_symlink():
+            dest.unlink()
         if not dest.exists():
             dest.symlink_to(data_file.resolve())
 
     dynamic_batch = _has_dynamic_batch(onnx_model_path)
+    device = model_cfg.get("parameters", {}).get("device", "cuda")
     config_pbtxt = _generate_model_config(
         model_name,
         model_cfg.get("inputs", []),
         model_cfg.get("outputs", []),
         dynamic_batch,
+        device=device,
     )
     (model_dir / "config.pbtxt").write_text(config_pbtxt)
 
@@ -233,19 +263,20 @@ def _create_model_dir(
 
 @dataclass
 class TritonRepoResult:
-    """Result of creating a Triton ensemble model repository.
+    """
+    Result of creating a Triton ensemble model repository.
 
-    Attributes:
-        model_name: Name of the ensemble model (always "ensemble").
-        input_tensor_names: Tensor names as they appear in the ROS TensorList
-            (matching InputBuilderNode output). These are the original YAML
-            model input names.
-        input_binding_names: Tensor names as they appear in the Triton ensemble
-            config.pbtxt. Usually the same as input_tensor_names, but may
-            differ when an input name collides with an output name (Triton
-            requires unique names across inputs and outputs).
-        output_tensor_names: Tensor names for outputs (same for ROS and Triton).
-        output_binding_names: Output binding names (same as output_tensor_names).
+    Fields:
+    - model_name: Name of the ensemble model (always "ensemble").
+    - input_tensor_names: Tensor names as they appear in the ROS TensorList
+      (matching InputBuilderNode output). These are the original YAML model
+      input names.
+    - input_binding_names: Tensor names as they appear in the Triton ensemble
+      config.pbtxt. Usually the same as input_tensor_names, but may differ
+      when an input name collides with an output name (Triton requires unique
+      names across inputs and outputs).
+    - output_tensor_names: Tensor names for outputs (same for ROS and Triton).
+    - output_binding_names: Output binding names (same as output_tensor_names).
     """
 
     model_name: str
@@ -259,19 +290,23 @@ def create_triton_model_repo(
     config_path: Path,
     output_dir: Path,
 ) -> TritonRepoResult:
-    """Create a Triton ensemble model repository from a YAML config.
+    """
+    Create a Triton ensemble model repository from a YAML config.
 
     Creates per-model directories with ONNX backends and an ensemble directory
     that chains them together. Works for any number of models (including one).
 
-    Args:
-        config_path: Path to the YAML configuration file.
-        output_dir: Directory to create the model repository in.
+    ``config_path`` is the path to the YAML configuration file.
+    ``output_dir`` is the directory to create the model repository in.
 
-    Returns:
-        A TritonRepoResult with model name, tensor names, and binding names.
+    Returns a TritonRepoResult with model name, tensor names, and binding
+    names.
     """
     config = yaml.safe_load(config_path.read_text())
+    if "models" not in config:
+        raise ValueError(
+            f"Config file {config_path} is missing required 'models' section"
+        )
     models = config["models"]
     pipeline = config.get("pipeline", {})
 

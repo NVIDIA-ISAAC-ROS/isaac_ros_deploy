@@ -1,5 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "isaac_ros_deploy_ros2_control/safety_controller/safety_controller.hpp"
 
@@ -7,17 +19,9 @@
 
 namespace isaac_deploy_core {
 
-  TEST(SafetyControllerTest, CreateWithClampVelocity) {
+  TEST(SafetyControllerTest, CreateWithInterpolate) {
     SafetyControllerConfig config {
-      .blend_ratio = {.type = BlendStrategy::kClampVelocity, .max_velocities = {1.0, 2.0, 3.0}},
-    };
-    auto result = SafetyController::create(config);
-    ASSERT_TRUE(result.has_value());
-  }
-
-  TEST(SafetyControllerTest, CreateWithInterpolatePosition) {
-    SafetyControllerConfig config {
-      .blend_ratio = {.type = BlendStrategy::kLinearInterpolate},
+      .blend_ratio = {.type = BlendStrategy::kInterpolate, .max_velocities = {1.0, 2.0, 3.0}},
     };
     auto result = SafetyController::create(config);
     ASSERT_TRUE(result.has_value());
@@ -31,9 +35,31 @@ namespace isaac_deploy_core {
     ASSERT_TRUE(result.has_value());
   }
 
+  TEST(SafetyControllerConfigTest, CreateFromYamlParsesVelocityThresholdConfig) {
+    const auto yaml = YAML::Load(R"(
+blend_ratio:
+  type: interpolate
+out_of_domain_detection:
+  velocity_threshold:
+    input_names:
+      - joint_velocities
+    max_velocity: 30.0
+    mean_velocity: 2.0
+)");
+
+    auto result = SafetyControllerConfig::create_from_yaml(yaml);
+    ASSERT_TRUE(result.has_value());
+
+    const auto & velocity_threshold = result->out_of_domain_detection.velocity_threshold;
+    ASSERT_EQ(velocity_threshold.input_names.size(), 1u);
+    EXPECT_EQ(velocity_threshold.input_names[0], "joint_velocities");
+    EXPECT_DOUBLE_EQ(velocity_threshold.max_velocity, 30.0);
+    EXPECT_DOUBLE_EQ(velocity_threshold.mean_velocity, 2.0);
+  }
+
   TEST(SafetyControllerTest, ActivateAndAdvance) {
     SafetyControllerConfig config {
-      .blend_ratio = {.type = BlendStrategy::kClampVelocity,
+      .blend_ratio = {.type = BlendStrategy::kInterpolate,
         .max_velocities = {1000.0, 1000.0, 1000.0}},
     };
     auto controller_result = SafetyController::create(config);

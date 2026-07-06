@@ -207,6 +207,14 @@ set_target_properties(component_container PROPERTIES
 
 ament_python_install_package(${PROJECT_NAME})
 
+# Python initial noise publisher node.
+install(PROGRAMS
+  isaac_ros_deploy_converters/initial_noise_publisher_node.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME initial_noise_publisher_node
+)
+
+
 # =============================================================================
 # Installation
 # =============================================================================
@@ -265,6 +273,25 @@ if(BUILD_TESTING)
     geometry_msgs
   )
   set_target_properties(test_message_to_tensor_converters PROPERTIES
+    INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  )
+
+  ament_add_gtest(test_joint_command_trajectory_converter
+    test/test_joint_command_trajectory_converter.cpp
+  )
+  target_link_libraries(test_joint_command_trajectory_converter
+    output_converters
+    ${TORCH_LIBRARIES}
+  )
+  target_include_directories(test_joint_command_trajectory_converter PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(test_joint_command_trajectory_converter
+    rclcpp
+    isaac_ros_deploy_interfaces
+  )
+  set_target_properties(test_joint_command_trajectory_converter PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )

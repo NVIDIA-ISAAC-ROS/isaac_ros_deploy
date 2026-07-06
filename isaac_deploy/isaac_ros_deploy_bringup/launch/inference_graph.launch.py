@@ -2,12 +2,25 @@
 
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-"""Reusable launch file for the inference graph pipeline.
+"""
+Reusable launch file for the inference graph pipeline.
 
 This launch file creates the core inference pipeline nodes:
 - InputBuilderNode: Converts ROS messages to a single bundled TensorList
-- TritonNode(s): Runs neural network inference per model via Triton Server
+- TritonNode: Runs neural network inference via a Triton ensemble model
 - OutputBuilderNode: Converts output TensorList to typed ROS messages
 
 All nodes are placed in a configurable namespace (default: 'inference_graph').
@@ -27,17 +40,16 @@ Usage:
 """
 
 import os
-import tempfile
 from pathlib import Path
+import tempfile
 
+from isaac_ros_deploy_converters.create_triton_model_repo import create_triton_model_repo
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import UnlessCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
-
-from isaac_ros_deploy_converters.create_triton_model_repo import create_triton_model_repo
 
 
 def generate_launch_description():
@@ -85,12 +97,20 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'output_to_topic',
             default_value='',
-            description='Comma-separated output:topic mappings '
+            description='Comma-separated output:topic overrides '
                         'for OutputBuilderNode. E.g., '
-                        '"joint_pos_targets:joint_commands,'
-                        'stiffness_targets:joint_commands". '
-                        'Outputs not listed default to their '
-                        'own name as topic.',
+                        '"bo1:joint_commands". Outputs not listed '
+                        'fall back to the converter message-type default '
+                        '(JointCommand -> joint_commands, '
+                        'JointCommandTrajectory -> joint_commands_trajectory, '
+                        'BodyCommand -> body_commands, Twist -> cmd_vel).',
+        ),
+        DeclareLaunchArgument(
+            'use_sim_time',
+            default_value='false',
+            description='Run the pipeline nodes on sim time so their clock '
+                        'matches MuJoCo / controllers when replaying '
+                        'recorded data through the graph in tests.',
         ),
     ]
 
@@ -134,10 +154,16 @@ def _launch(context):
         'output_to_topic',
     )
 
+    use_sim_time = (
+        LaunchConfiguration('use_sim_time').perform(context).lower() == 'true'
+    )
+    sim_time_params = {'use_sim_time': use_sim_time}
+
     input_builder_params = {
         'config_path': config_path,
         'publish_rate': float(LaunchConfiguration('publish_rate').perform(context)),
         'output_topic': 'input_tensors',
+        **sim_time_params,
         **source_to_topic_params,
         **source_message_type_params,
     }
@@ -163,7 +189,17 @@ def _launch(context):
         repo_dir = Path(test_tmpdir) / f'triton_repo_{config_file.stem}'
     else:
         repo_dir = Path(tempfile.gettempdir()) / f'triton_repo_{config_file.stem}'
-    repo = create_triton_model_repo(config_file, repo_dir)
+    try:
+        repo = create_triton_model_repo(config_file, repo_dir)
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f'Failed to create Triton model repo: {e}. '
+            f'Check that model paths in \'{config_path}\' are correct.'
+        ) from e
+    except Exception as e:
+        raise RuntimeError(
+            f'Failed to create Triton model repo from \'{config_path}\': {e}'
+        ) from e
     triton_node_name = f'triton_{repo.model_name}'.replace('-', '_')
 
     triton_params = {
@@ -177,6 +213,9 @@ def _launch(context):
         'output_binding_names': repo.output_binding_names,
         'input_tensor_formats': ['nitros_tensor_list_nchw_rgb_f32'],
         'output_tensor_formats': ['nitros_tensor_list_nchw_rgb_f32'],
+        'enable_triton_logging': False,
+        'log_level': 0,
+        **sim_time_params,
     }
 
     triton_node = ComposableNode(
@@ -194,6 +233,7 @@ def _launch(context):
     output_builder_params = {
         'config_path': config_path,
         'input_topic': 'output_tensors',
+        **sim_time_params,
         **output_to_topic_params,
     }
 

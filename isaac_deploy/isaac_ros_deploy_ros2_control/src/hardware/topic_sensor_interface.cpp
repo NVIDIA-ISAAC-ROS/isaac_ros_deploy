@@ -1,5 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "isaac_ros_deploy_ros2_control/hardware/topic_sensor_interface.hpp"
 
@@ -152,6 +164,15 @@ hardware_interface::return_type TopicSensorInterface::read(
 {
   // Copy the latest value from the subscription thread
   std::lock_guard<std::mutex> lock(value_mutex_);
+  if (!received_first_message_ && subscription_ &&
+    subscription_->get_publisher_count() > 0)
+  {
+    RCLCPP_WARN_THROTTLE(
+      rclcpp::get_logger("TopicSensorInterface"),
+      *node_->get_clock(), 5000,
+      "No messages received on '%s' — using default value %f",
+      topic_name_.c_str(), default_value_);
+  }
   state_value_ = current_value_;
   return hardware_interface::return_type::OK;
 }
@@ -160,6 +181,7 @@ void TopicSensorInterface::topic_callback(const std_msgs::msg::Float64::SharedPt
 {
   std::lock_guard<std::mutex> lock(value_mutex_);
   current_value_ = msg->data;
+  received_first_message_ = true;
 }
 
 }  // namespace hardware

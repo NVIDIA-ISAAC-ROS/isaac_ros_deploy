@@ -16,6 +16,7 @@ endif()
 
 # Find dependencies.
 find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(tl_expected REQUIRED)
 
@@ -39,12 +40,19 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 include(FetchContent)
 if(NOT TRITON_SERVER_TARBALL_URL)
   if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-    set(TRITON_SERVER_TARBALL_URL "https://github.com/triton-inference-server/server/releases/download/v2.60.0/tritonserver2.60.0-agx.tar")
+    set(_TRITON_BASE_URL "https://github.com/triton-inference-server/server/releases/download")
+    set(TRITON_SERVER_TARBALL_URL "${_TRITON_BASE_URL}/v2.60.0/tritonserver2.60.0-agx.tar")
   else()
-    set(TRITON_SERVER_TARBALL_URL "https://urm.nvidia.com/artifactory/sw-isaac-ros-generic-local/triton/tritonserver.2.60.tar.gz")
+    set(_TRITON_BASE_URL "https://artifactory.pdx.nvidia.com/artifactory")
+    set(_TRITON_PATH "sw-isaac-ros-generic-local/triton/tritonserver.2.60.tar.gz")
+    set(TRITON_SERVER_TARBALL_URL "${_TRITON_BASE_URL}/${_TRITON_PATH}")
   endif()
 endif()
-fetchcontent_declare(tritonserver URL ${TRITON_SERVER_TARBALL_URL} DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+fetchcontent_declare(
+  tritonserver
+  URL ${TRITON_SERVER_TARBALL_URL}
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
 fetchcontent_populate(tritonserver)
 
 file(GLOB_RECURSE _TRITON_HDR_CANDIDATES "${tritonserver_SOURCE_DIR}/*/tritonserver.h")
@@ -68,12 +76,20 @@ set_target_properties(tritonserver::tritonserver PROPERTIES
 # =============================================================================
 
 # Create symlinks for build-time includes that match the install structure.
-# This allows both internal includes (core/types.h) and external includes
-# (isaac_deploy_core/core/types.h) to work during build.
+# This allows both internal includes (core/types.hpp) and external includes
+# (isaac_deploy_core/core/types.hpp) to work during build.
 set(BUILD_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/include)
 file(MAKE_DIRECTORY ${BUILD_INCLUDE_DIR}/isaac_deploy_core)
-file(CREATE_LINK ${CMAKE_CURRENT_SOURCE_DIR}/core ${BUILD_INCLUDE_DIR}/isaac_deploy_core/core SYMBOLIC)
-file(CREATE_LINK ${CMAKE_CURRENT_SOURCE_DIR}/inference_controller ${BUILD_INCLUDE_DIR}/isaac_deploy_core/inference_controller SYMBOLIC)
+file(CREATE_LINK
+  ${CMAKE_CURRENT_SOURCE_DIR}/core
+  ${BUILD_INCLUDE_DIR}/isaac_deploy_core/core
+  SYMBOLIC
+)
+file(CREATE_LINK
+  ${CMAKE_CURRENT_SOURCE_DIR}/inference_controller
+  ${BUILD_INCLUDE_DIR}/isaac_deploy_core/inference_controller
+  SYMBOLIC
+)
 
 # =============================================================================
 # Core Libraries
@@ -99,7 +115,7 @@ target_link_libraries(expected INTERFACE tl_expected::tl_expected)
 
 # core::tensor_utils
 add_library(tensor_utils SHARED
-  core/tensor_utils.cc
+  core/tensor_utils.cpp
 )
 target_include_directories(tensor_utils PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -122,7 +138,7 @@ set_target_properties(tensor_utils PROPERTIES
 
 # inference_controller/input::input_term
 add_library(input_term SHARED
-  inference_controller/input/input_term.cc
+  inference_controller/input/input_term.cpp
 )
 target_include_directories(input_term PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -143,7 +159,7 @@ set_target_properties(input_term PROPERTIES
 
 # inference_controller/input::input_builder
 add_library(input_builder SHARED
-  inference_controller/input/input_builder.cc
+  inference_controller/input/input_builder.cpp
 )
 target_include_directories(input_builder PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -167,7 +183,7 @@ set_target_properties(input_builder PROPERTIES
 
 # inference_controller/output::output_term
 add_library(output_term SHARED
-  inference_controller/output/output_term.cc
+  inference_controller/output/output_term.cpp
 )
 target_include_directories(output_term PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -188,7 +204,7 @@ set_target_properties(output_term PROPERTIES
 
 # inference_controller/output::output_builder
 add_library(output_builder SHARED
-  inference_controller/output/output_builder.cc
+  inference_controller/output/output_builder.cpp
 )
 target_include_directories(output_builder PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -224,7 +240,7 @@ target_link_libraries(inference_runner_base INTERFACE
 
 # inference_controller/runner::mock_runner
 add_library(mock_runner SHARED
-  inference_controller/runner/mock_runner.cc
+  inference_controller/runner/mock_runner.cpp
 )
 target_include_directories(mock_runner PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -244,7 +260,7 @@ set_target_properties(mock_runner PROPERTIES
 
 # inference_controller/runner::triton_runner
 add_library(triton_runner SHARED
-  inference_controller/runner/triton_runner.cc
+  inference_controller/runner/triton_runner.cpp
 )
 target_include_directories(triton_runner PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -267,7 +283,7 @@ set_target_properties(triton_runner PROPERTIES
 
 # inference_controller/runner::inference_runner
 add_library(inference_runner SHARED
-  inference_controller/runner/inference_runner.cc
+  inference_controller/runner/inference_runner.cpp
 )
 target_include_directories(inference_runner PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -291,7 +307,7 @@ set_target_properties(inference_runner PROPERTIES
 
 # inference_controller::config_parser
 add_library(config_parser SHARED
-  inference_controller/config_parser.cc
+  inference_controller/config_parser.cpp
 )
 target_include_directories(config_parser PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -308,7 +324,7 @@ target_link_libraries(config_parser PUBLIC
 # =============================================================================
 
 add_library(inference_controller SHARED
-  inference_controller/inference_controller.cc
+  inference_controller/inference_controller.cpp
 )
 target_include_directories(inference_controller PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -357,12 +373,17 @@ install(
 install(
   DIRECTORY core/
   DESTINATION include/isaac_deploy_core/core
-  FILES_MATCHING PATTERN "*.h"
+  FILES_MATCHING PATTERN "*.hpp"
 )
 install(
   DIRECTORY inference_controller/
   DESTINATION include/isaac_deploy_core/inference_controller
-  FILES_MATCHING PATTERN "*.h"
+  FILES_MATCHING PATTERN "*.hpp"
+)
+install(
+  DIRECTORY include/isaac_deploy_core/
+  DESTINATION include/isaac_deploy_core
+  FILES_MATCHING PATTERN "*.hpp"
 )
 
 # Install test data.
@@ -373,7 +394,7 @@ install(
 
 # Export targets for downstream packages.
 ament_export_targets(isaac_deploy_core_targets HAS_LIBRARY_TARGET)
-ament_export_dependencies(yaml-cpp tl_expected)
+ament_export_dependencies(yaml-cpp tl_expected rclcpp)
 
 # Export LibTorch and ONNX Runtime for downstream packages.
 # Configure the extras file from template to the build directory
@@ -390,7 +411,10 @@ install(FILES
 )
 
 # Register the configured extras file (relative to build directory)
-list(APPEND ${PROJECT_NAME}_CONFIG_EXTRAS "${CMAKE_CURRENT_BINARY_DIR}/cmake/isaac_deploy_core-extras.cmake")
+list(
+  APPEND ${PROJECT_NAME}_CONFIG_EXTRAS
+  "${CMAKE_CURRENT_BINARY_DIR}/cmake/isaac_deploy_core-extras.cmake"
+)
 
 # =============================================================================
 # Testing
@@ -400,14 +424,14 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
   # Core tests.
-  ament_add_gtest(types_test core/types_test.cc)
+  ament_add_gtest(types_test core/types_test.cpp)
   target_link_libraries(types_test types ${TORCH_LIBRARIES})
   set_target_properties(types_test PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )
 
-  ament_add_gtest(tensor_utils_test core/tensor_utils_test.cc)
+  ament_add_gtest(tensor_utils_test core/tensor_utils_test.cpp)
   target_link_libraries(tensor_utils_test tensor_utils ${TORCH_LIBRARIES})
   set_target_properties(tensor_utils_test PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
@@ -415,14 +439,14 @@ if(BUILD_TESTING)
   )
 
   # Input tests.
-  ament_add_gtest(input_term_test inference_controller/input/input_term_test.cc)
+  ament_add_gtest(input_term_test inference_controller/input/input_term_test.cpp)
   target_link_libraries(input_term_test input_term ${TORCH_LIBRARIES})
   set_target_properties(input_term_test PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )
 
-  ament_add_gtest(input_builder_test inference_controller/input/input_builder_test.cc)
+  ament_add_gtest(input_builder_test inference_controller/input/input_builder_test.cpp)
   target_link_libraries(input_builder_test input_builder config_parser ${TORCH_LIBRARIES})
   set_target_properties(input_builder_test PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
@@ -430,14 +454,14 @@ if(BUILD_TESTING)
   )
 
   # Output tests.
-  ament_add_gtest(output_term_test inference_controller/output/output_term_test.cc)
+  ament_add_gtest(output_term_test inference_controller/output/output_term_test.cpp)
   target_link_libraries(output_term_test output_term ${TORCH_LIBRARIES})
   set_target_properties(output_term_test PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )
 
-  ament_add_gtest(output_builder_test inference_controller/output/output_builder_test.cc)
+  ament_add_gtest(output_builder_test inference_controller/output/output_builder_test.cpp)
   target_link_libraries(output_builder_test output_builder ${TORCH_LIBRARIES})
   set_target_properties(output_builder_test PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
@@ -445,7 +469,7 @@ if(BUILD_TESTING)
   )
 
   # Runner tests.
-  ament_add_gtest(triton_runner_test inference_controller/runner/triton_runner_test.cc)
+  ament_add_gtest(triton_runner_test inference_controller/runner/triton_runner_test.cpp)
   target_link_libraries(triton_runner_test triton_runner ${TORCH_LIBRARIES})
   set_target_properties(triton_runner_test PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib;${_TRITON_LIB_DIR}"
@@ -453,16 +477,23 @@ if(BUILD_TESTING)
   )
 
   # Config parser test.
-  ament_add_gtest(config_parser_test inference_controller/config_parser_test.cc)
+  ament_add_gtest(config_parser_test inference_controller/config_parser_test.cpp)
   target_link_libraries(config_parser_test config_parser yaml-cpp)
 
   # Inference controller test.
-  ament_add_gtest(inference_controller_test inference_controller/inference_controller_test.cc)
+  ament_add_gtest(inference_controller_test inference_controller/inference_controller_test.cpp)
   target_link_libraries(inference_controller_test inference_controller ${TORCH_LIBRARIES})
   set_target_properties(inference_controller_test PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib;${_TRITON_LIB_DIR}"
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib;${_TRITON_LIB_DIR}"
   )
+
+  # Chunk sampler test (header-only utility).
+  ament_add_gtest(test_chunk_sampler test/test_chunk_sampler.cpp)
+  target_include_directories(test_chunk_sampler PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(test_chunk_sampler rclcpp)
 endif()
 
 ament_package()

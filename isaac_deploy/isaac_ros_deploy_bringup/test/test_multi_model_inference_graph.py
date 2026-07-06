@@ -2,6 +2,18 @@
 
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Integration test for the multi-model inference graph pipeline.
 
@@ -21,20 +33,17 @@ Expected bo1 values over 5 iterations: [1, 4, 12, 33, 88]
 """
 
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from pathlib import Path
 
-import launch
-import launch_testing
-import launch_testing.actions
-import rclpy
 from ament_index_python.packages import get_package_share_directory
 from isaac_ros_deploy_interfaces.msg import JointCommand
+import launch
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
@@ -42,6 +51,9 @@ from launch.actions import (
 )
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+import launch_testing
+import launch_testing.actions
+import rclpy
 from sensor_msgs.msg import JointState
 
 
@@ -207,26 +219,60 @@ class TestMultiModelInferenceGraph(unittest.TestCase):
         #   t4: A = 1+21+33 = 55, B = 55+33 = 88
         expected_values = [1.0, 4.0, 12.0, 33.0, 88.0]
 
+        # InputBuilder ticks on its own cadence and bundles the latest feedback
+        # available at tick time.  Until the first bo1 has actually arrived at
+        # the feedback subscription, every tick reuses the zero default and
+        # emits 1.0 again, so a slow first hop can produce one or more leading
+        # 1.0 outputs before the sequence advances.  Wait for enough messages
+        # to contain the full sequence + a few stale-feedback duplicates.
+        max_messages = len(expected_values) + 5
         self.assertTrue(
             self._spin_until_condition(
-                lambda: len(self.received_joint_commands) >= len(expected_values),
+                lambda: any(
+                    self._matches_expected_sequence(
+                        self.received_joint_commands, expected_values, start
+                    )
+                    for start in range(
+                        max(0, len(self.received_joint_commands) - len(expected_values) + 1)
+                    )
+                )
+                or len(self.received_joint_commands) >= max_messages,
             ),
-            f"Expected at least {len(expected_values)} messages, "
-            f"got {len(self.received_joint_commands)}",
+            f"Did not observe sequence {expected_values} in first "
+            f"{max_messages} messages; got "
+            f"{[m.position[0] for m in self.received_joint_commands]}",
         )
         publish_timer.cancel()
 
-        for i, expected in enumerate(expected_values):
-            self.assertAlmostEqual(
-                self.received_joint_commands[i].position[0],
-                expected,
-                places=1,
-                msg=f"Iteration {i + 1}: expected {expected}, "
-                f"got {self.received_joint_commands[i].position[0]}",
-            )
-
-        # Verify joint names on a representative message.
+        # Locate the contiguous sequence and check joint names on its first message.
+        match_start = next(
+            (
+                start
+                for start in range(
+                    len(self.received_joint_commands) - len(expected_values) + 1
+                )
+                if self._matches_expected_sequence(
+                    self.received_joint_commands, expected_values, start
+                )
+            ),
+            None,
+        )
+        self.assertIsNotNone(
+            match_start,
+            f"Expected contiguous sequence {expected_values} not found in "
+            f"{[m.position[0] for m in self.received_joint_commands]}",
+        )
         self.assertEqual(
-            list(self.received_joint_commands[0].names),
+            list(self.received_joint_commands[match_start].names),
             ["test_joint"],
+        )
+
+    @staticmethod
+    def _matches_expected_sequence(messages, expected, start):
+        """Return True if `expected` appears at `start` in `messages` (within ±0.05)."""
+        if start + len(expected) > len(messages):
+            return False
+        return all(
+            abs(messages[start + i].position[0] - expected[i]) < 0.05
+            for i in range(len(expected))
         )
