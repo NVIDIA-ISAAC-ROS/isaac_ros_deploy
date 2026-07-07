@@ -1,5 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "isaac_ros_deploy_ros2_control/controllers/inference_controller.hpp"
 
@@ -7,7 +19,7 @@
 
 #include <filesystem>
 
-#include "isaac_deploy_core/inference_controller/config_parser.h"
+#include "isaac_deploy_core/inference_controller/config_parser.hpp"
 #include "isaac_ros_deploy_ros2_control/adapters/command_interface_adapter.hpp"
 #include "isaac_ros_deploy_ros2_control/adapters/state_interface_adapter.hpp"
 #include "isaac_ros_deploy_ros2_control/converters/command_interface_converter.hpp"
@@ -19,16 +31,6 @@ namespace isaac_ros_deploy_ros2_control
 namespace controllers
 {
 
-namespace
-{
-
-/// Extract a human-readable error message from an isaac_deploy_core::Error.
-const std::string & error_message(const isaac_deploy_core::Error & error)
-{
-  return error.message;
-}
-
-}  // namespace
 
 InferenceController::InferenceController() = default;
 
@@ -62,7 +64,7 @@ controller_interface::CallbackReturn InferenceController::on_configure(
     return controller_interface::CallbackReturn::ERROR;
   }
 
-  // Initialize all converter registries before loading config.
+  // Initialize the converter registries needed by this controller.
   initialize_state_interface_converters();
   initialize_command_interface_converters();
   isaac_ros_deploy_converters::initialize_input_converters();
@@ -72,6 +74,12 @@ controller_interface::CallbackReturn InferenceController::on_configure(
   }
 
   create_topic_subscriptions();
+
+  // Latched `~/is_active` publisher — emits once when `core_activated_` first
+  // flips true.  Subscribers created after that still receive the message
+  // thanks to TRANSIENT_LOCAL durability.
+  is_active_publisher_ = get_node()->create_publisher<std_msgs::msg::Bool>(
+    "~/is_active", rclcpp::QoS(1).transient_local().reliable());
 
   RCLCPP_INFO(
     get_node()->get_logger(), "Configured InferenceController with config: %s",
@@ -231,6 +239,20 @@ bool InferenceController::load_config()
       std::make_unique<isaac_deploy_core::InferenceController>(
       std::move(controller_result.value()));
 
+    // Trigger TensorRT JIT compilation now, in on_configure(), before the real-time
+    // control loop starts.  Without this, the first runner_->run() call inside
+    // update() would block for ~400 ms, freezing the entire control thread
+    // (including the gantry).  on_configure() runs outside the real-time thread
+    // so the stall is harmless here.
+    RCLCPP_INFO(get_node()->get_logger(), "Running inference warmup (TensorRT compilation)...");
+    auto warmup_result = inference_controller_->warmup();
+    if (!warmup_result.has_value()) {
+      RCLCPP_WARN(get_node()->get_logger(), "Inference warmup failed: %s",
+        std::string(warmup_result.error().message).c_str());
+    } else {
+      RCLCPP_INFO(get_node()->get_logger(), "Inference warmup complete.");
+    }
+
     return true;
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to load config: %s", e.what());
@@ -266,6 +288,7 @@ void InferenceController::create_topic_subscriptions()
   // Group topic sources by resolved topic to share subscriptions.
   std::unordered_map<std::string, std::unique_ptr<TopicGroup>> groups_by_topic;
 
+  size_t skipped_converters = 0;
   for (const auto & topic_config : topic_source_configs_) {
     const auto message_type_override = resolve_message_type(topic_config.source);
     auto converter = registry.create_for_kind(
@@ -273,8 +296,10 @@ void InferenceController::create_topic_subscriptions()
     if (!converter) {
       RCLCPP_WARN(
         get_node()->get_logger(),
-        "No converter found for kind '%s' (source '%s'), skipping",
+        "No converter found for kind '%s' (source '%s'), skipping — "
+        "this input will use zero tensors",
         topic_config.kind.c_str(), topic_config.source.c_str());
+      ++skipped_converters;
       continue;
     }
 
@@ -299,6 +324,13 @@ void InferenceController::create_topic_subscriptions()
       }
       it->second->entries.push_back({topic_config.source, converter});
     }
+  }
+
+  if (skipped_converters > 0) {
+    RCLCPP_WARN(
+      get_node()->get_logger(),
+      "%zu of %zu topic inputs have no converter and will use zero tensors",
+      skipped_converters, topic_source_configs_.size());
   }
 
   // Create one generic subscription per topic group.
@@ -332,7 +364,7 @@ InferenceController::command_interface_configuration() const
 
   if (command_adapter_) {
     config.names = command_adapter_->get_required_command_interfaces();
-    RCLCPP_INFO(
+    RCLCPP_DEBUG(
       get_node()->get_logger(), "Requesting %zu command interfaces", config.names.size());
     for (const auto & name : config.names) {
       RCLCPP_DEBUG(get_node()->get_logger(), "  - %s", name.c_str());
@@ -350,7 +382,7 @@ InferenceController::state_interface_configuration() const
 
   if (state_adapter_) {
     config.names = state_adapter_->get_required_state_interfaces();
-    RCLCPP_INFO(
+    RCLCPP_DEBUG(
       get_node()->get_logger(), "Requesting %zu state interfaces", config.names.size());
     for (const auto & name : config.names) {
       RCLCPP_DEBUG(get_node()->get_logger(), "  - %s", name.c_str());
@@ -462,7 +494,10 @@ controller_interface::CallbackReturn InferenceController::on_activate(
   }
 
   update_counter_ = 0;
-  RCLCPP_INFO(get_node()->get_logger(), "InferenceController activated");
+  RCLCPP_INFO(
+    get_node()->get_logger(),
+    "InferenceController activated (decimation: %d, inference runs every %d update cycles)",
+    decimation_, decimation_);
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
@@ -496,11 +531,16 @@ bool InferenceController::try_activate_core(int64_t timestamp_ns)
     RCLCPP_ERROR(
       get_node()->get_logger(),
       "Failed to activate InferenceController: %s",
-      error_message(result.error()).c_str());
+      result.error().message.c_str());
     return false;
   }
 
   core_activated_ = true;
+  if (is_active_publisher_) {
+    std_msgs::msg::Bool msg;
+    msg.data = true;
+    is_active_publisher_->publish(msg);
+  }
   RCLCPP_INFO(get_node()->get_logger(), "Core InferenceController activated");
   return true;
 }
@@ -513,11 +553,16 @@ controller_interface::CallbackReturn InferenceController::on_deactivate(
     if (!result.has_value()) {
       RCLCPP_WARN(
         get_node()->get_logger(), "Failed to deactivate InferenceController: %s",
-        error_message(result.error()).c_str());
+        result.error().message.c_str());
     }
   }
 
   core_activated_ = false;
+  if (is_active_publisher_) {
+    std_msgs::msg::Bool msg;
+    msg.data = false;
+    is_active_publisher_->publish(msg);
+  }
   inputs_.clear();
   input_specs_.clear();
   outputs_.clear();
@@ -595,7 +640,7 @@ controller_interface::return_type InferenceController::update(
   if (!result.has_value()) {
     RCLCPP_ERROR(
       get_node()->get_logger(), "Inference failed: %s",
-      error_message(result.error()).c_str());
+      result.error().message.c_str());
     return controller_interface::return_type::ERROR;
   }
 

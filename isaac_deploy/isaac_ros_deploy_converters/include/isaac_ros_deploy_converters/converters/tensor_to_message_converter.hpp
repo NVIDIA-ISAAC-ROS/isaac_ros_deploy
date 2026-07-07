@@ -1,5 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #pragma once
 
@@ -85,7 +97,11 @@ public:
 };
 
 /// Factory function type for creating output converters.
-using OutputConverterFactory = std::function<std::shared_ptr<TensorToMessageConverter>()>;
+/// `shape` is the YAML-declared tensor shape (e.g. {1, 7} or {1, 30, 7});
+/// factories may return nullptr if they don't handle this shape rank.
+using OutputConverterFactory =
+  std::function<std::shared_ptr<TensorToMessageConverter>(
+      const std::vector<int64_t> & shape)>;
 
 /// Registry for output converters.
 class OutputConverterRegistry
@@ -103,12 +119,16 @@ public:
     kind_to_factory_[std::move(kind)] = std::move(factory);
   }
 
-  /// Create a converter for a specific kind. Returns nullptr if not found.
-  std::shared_ptr<TensorToMessageConverter> create_for_kind(const std::string & kind) const
+  /// Create a converter for a specific kind and shape.  Returns nullptr if
+  /// no converter is registered for `kind` or the factory returns nullptr
+  /// for this `shape`.
+  std::shared_ptr<TensorToMessageConverter> create_for_kind(
+    const std::string & kind,
+    const std::vector<int64_t> & shape) const
   {
     auto it = kind_to_factory_.find(kind);
     if (it != kind_to_factory_.end()) {
-      return it->second();
+      return it->second(shape);
     }
     return nullptr;
   }

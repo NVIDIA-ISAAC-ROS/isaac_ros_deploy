@@ -1,5 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "isaac_ros_deploy_converters/nodes/output_builder_node.hpp"
 
@@ -7,11 +19,40 @@
 
 #include "rclcpp_components/register_node_macro.hpp"
 
-#include "isaac_deploy_core/inference_controller/config_parser.h"
+#include "isaac_deploy_core/inference_controller/config_parser.hpp"
 #include "isaac_ros_deploy_converters/utils/tensor_list_utils.hpp"
+#include "isaac_ros_deploy_interfaces/msg/joint_command_trajectory.hpp"
 
 namespace isaac_ros_deploy_converters
 {
+
+namespace
+{
+
+/// Default topic for each ROS message type emitted by an output converter.
+/// Callers set `output_to_topic.<name>` to override (e.g., routing two
+/// models to distinct topics).
+std::string default_topic_for_message_type(
+  const std::string & message_type, const std::string & output_name)
+{
+  if (message_type == "isaac_ros_deploy_interfaces/msg/JointCommand") {
+    return "joint_commands";
+  }
+  if (message_type == "isaac_ros_deploy_interfaces/msg/JointCommandTrajectory") {
+    return "joint_commands_trajectory";
+  }
+  if (message_type == "isaac_ros_deploy_interfaces/msg/BodyCommand") {
+    return "body_commands";
+  }
+  if (message_type == "geometry_msgs/msg/Twist") {
+    return "cmd_vel";
+  }
+  // Unknown type: fall back to the output name so unrecognised converters
+  // still get a unique topic.
+  return output_name;
+}
+
+}  // namespace
 
 OutputBuilderNode::OutputBuilderNode(const rclcpp::NodeOptions & options)
 : Node("output_builder_node", options)
@@ -36,24 +77,19 @@ void OutputBuilderNode::configure()
   try {
     config = YAML::LoadFile(config_path_);
   } catch (const std::exception & e) {
-    RCLCPP_ERROR(get_logger(), "Failed to load config file: %s", e.what());
-    return;
+    throw std::runtime_error("Failed to load config file: " + std::string(e.what()));
   }
 
   auto graph_result = isaac_deploy_core::parse_graph_config(config);
   if (!graph_result) {
-    RCLCPP_ERROR(
-      get_logger(), "Failed to parse config: %s",
-      graph_result.error().message.c_str());
-    return;
+    throw std::runtime_error(
+      "Failed to parse config: " + graph_result.error().message);
   }
 
   auto sections_result = isaac_deploy_core::merge_graph_to_model_config(*graph_result, config);
   if (!sections_result) {
-    RCLCPP_ERROR(
-      get_logger(), "Failed to merge graph config: %s",
-      sections_result.error().message.c_str());
-    return;
+    throw std::runtime_error(
+      "Failed to merge graph config: " + sections_result.error().message);
   }
 
   // Filter outputs to only those that have registered output converters
@@ -66,32 +102,42 @@ void OutputBuilderNode::configure()
       continue;
     }
     auto kind = output_yaml["kind"].as<std::string>();
-    if (registry.create_for_kind(kind)) {
+    if (!output_yaml["shape"].IsDefined()) {
+      continue;
+    }
+    const auto shape = output_yaml["shape"].as<std::vector<int64_t>>();
+    if (registry.create_for_kind(kind, shape)) {
       filtered_outputs.push_back(output_yaml);
     } else {
       RCLCPP_WARN(
-        get_logger(), "Output '%s' (kind: %s) has no registered converter, skipping",
-        output_yaml["name"].as<std::string>().c_str(), kind.c_str());
+        get_logger(),
+        "Output '%s' (kind: %s) has no registered converter for shape rank %zu, skipping",
+        output_yaml["name"].as<std::string>().c_str(), kind.c_str(), shape.size());
     }
   }
   sections_result->outputs = filtered_outputs;
 
-  const auto builder_config_result =
+  auto builder_config_result =
     isaac_deploy_core::OutputBuilder::Config::create_from_model_config(
     *sections_result);
   if (!builder_config_result) {
-    RCLCPP_ERROR(
-      get_logger(), "Failed to parse OutputBuilder config: %s",
-      builder_config_result.error().message.c_str());
-    return;
+    throw std::runtime_error(
+      "Failed to parse OutputBuilder config: " + builder_config_result.error().message);
+  }
+
+  // Read semantic.scene.dt from the raw YAML so the builder can stamp step_dt
+  // on JointCommandTrajectory messages. Defaults to 0.02 s (50 Hz) if unset.
+  if (config["semantic"] && config["semantic"]["scene"] &&
+    config["semantic"]["scene"]["dt"].IsDefined())
+  {
+    builder_config_result->policy_dt_seconds =
+      config["semantic"]["scene"]["dt"].as<double>();
   }
 
   auto builder_result = isaac_deploy_core::OutputBuilder::create(*builder_config_result);
   if (!builder_result) {
-    RCLCPP_ERROR(
-      get_logger(), "Failed to create OutputBuilder: %s",
-      builder_result.error().message.c_str());
-    return;
+    throw std::runtime_error(
+      "Failed to create OutputBuilder: " + builder_result.error().message);
   }
   output_builder_ = std::move(*builder_result);
 
@@ -114,10 +160,8 @@ void OutputBuilderNode::configure()
   std::vector<isaac_deploy_core::TensorSpec> output_specs(outputs_.size());
   auto activate_result = output_builder_->activate(output_specs, outputs_);
   if (!activate_result) {
-    RCLCPP_ERROR(
-      get_logger(), "Failed to activate OutputBuilder: %s",
-      activate_result.error().message.c_str());
-    return;
+    throw std::runtime_error(
+      "Failed to activate OutputBuilder: " + activate_result.error().message);
   }
 
   create_publication_groups();
@@ -139,15 +183,18 @@ void OutputBuilderNode::create_publication_groups()
   auto & registry = OutputConverterRegistry::instance();
   auto output_to_kind = output_builder_->get_output_to_kind_map();
   auto output_names = output_builder_->get_output_names();
+  auto output_shapes = output_builder_->get_output_shapes();
 
   // For each output, create a converter and resolve its topic.
   // Group by topic (validate message_type consistency within group).
   std::unordered_map<std::string, std::unique_ptr<PublicationGroup>> groups;
 
-  for (const auto & name : output_names) {
+  for (size_t i = 0; i < output_names.size(); ++i) {
+    const auto & name = output_names[i];
     const auto & kind = output_to_kind[name];
+    const auto & shape = output_shapes[i];
 
-    auto converter = registry.create_for_kind(kind);
+    auto converter = registry.create_for_kind(kind, shape);
     if (!converter) {
       RCLCPP_WARN(
         get_logger(), "No converter for kind '%s', skipping output '%s'",
@@ -155,9 +202,12 @@ void OutputBuilderNode::create_publication_groups()
       continue;
     }
 
-    // Look up topic from output_to_topic parameter (default: output name).
-    std::string param_name = "output_to_topic." + name;
-    declare_parameter<std::string>(param_name, name);
+    // Default topic follows the converter's ROS message type; override
+    // via `output_to_topic.<name>`.
+    const std::string default_topic = default_topic_for_message_type(
+      converter->get_message_type(), name);
+    const std::string param_name = "output_to_topic." + name;
+    declare_parameter<std::string>(param_name, default_topic);
     std::string topic = get_parameter(param_name).as_string();
 
     auto it = groups.find(topic);
@@ -249,20 +299,46 @@ void OutputBuilderNode::on_tensor_list(
   for (auto & group : publication_groups_) {
     auto typed_msg = group->converters.front().converter->create_message();
 
+    // Stamp step_dt if this publication group emits a JointCommandTrajectory.
+    if (group->converters.front().converter->get_message_type() ==
+      "isaac_ros_deploy_interfaces/msg/JointCommandTrajectory")
+    {
+      auto & traj = *std::static_pointer_cast<
+        isaac_ros_deploy_interfaces::msg::JointCommandTrajectory>(typed_msg);
+      traj.step_dt = rclcpp::Duration::from_seconds(
+        output_builder_->get_policy_dt_seconds());
+    }
+
+    bool group_ok = true;
     for (const auto & entry : group->converters) {
       auto it = output_map_.find(entry.output_name);
       if (it == output_map_.end()) {continue;}
 
-      entry.converter->write(
-        it->second.tensor,
-        output_builder_->get_element_names(entry.output_name),
-        typed_msg,
-        timestamp_ns);
+      try {
+        entry.converter->write(
+          it->second.tensor,
+          output_builder_->get_element_names(entry.output_name),
+          typed_msg,
+          timestamp_ns);
+      } catch (const std::exception & e) {
+        RCLCPP_ERROR_THROTTLE(
+          get_logger(), *get_clock(), 1000,
+          "Converter for output '%s' threw: %s; skipping publication group",
+          entry.output_name.c_str(), e.what());
+        group_ok = false;
+        break;
+      }
     }
+
+    if (!group_ok) {continue;}
 
     auto serialized = group->converters.front().converter->serialize(typed_msg);
     if (serialized) {
       group->publisher->publish(*serialized);
+    } else {
+      RCLCPP_ERROR(
+        get_logger(), "Failed to serialize message for topic '%s'",
+        group->topic.c_str());
     }
   }
 }

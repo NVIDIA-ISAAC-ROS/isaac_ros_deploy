@@ -1,5 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "isaac_ros_deploy_converters/nodes/input_builder_node.hpp"
 
@@ -11,7 +23,7 @@
 
 #include "rclcpp_components/register_node_macro.hpp"
 
-#include "isaac_deploy_core/inference_controller/config_parser.h"
+#include "isaac_deploy_core/inference_controller/config_parser.hpp"
 #include "isaac_ros_deploy_converters/converters/message_to_tensor_converter_nodes.hpp"
 #include "isaac_ros_deploy_converters/utils/tensor_list_utils.hpp"
 
@@ -65,24 +77,19 @@ void InputBuilderNode::configure()
   try {
     config = YAML::LoadFile(config_path_);
   } catch (const std::exception & e) {
-    RCLCPP_ERROR(get_logger(), "Failed to load config file: %s", e.what());
-    return;
+    throw std::runtime_error("Failed to load config file: " + std::string(e.what()));
   }
 
   auto graph_result = isaac_deploy_core::parse_graph_config(config);
   if (!graph_result) {
-    RCLCPP_ERROR(
-      get_logger(), "Failed to parse config: %s",
-      graph_result.error().message.c_str());
-    return;
+    throw std::runtime_error(
+      "Failed to parse config: " + graph_result.error().message);
   }
 
   auto model_config_result = isaac_deploy_core::merge_graph_to_model_config(*graph_result, config);
   if (!model_config_result) {
-    RCLCPP_ERROR(
-      get_logger(), "Failed to merge graph config: %s",
-      model_config_result.error().message.c_str());
-    return;
+    throw std::runtime_error(
+      "Failed to merge graph config: " + model_config_result.error().message);
   }
 
   // Collect feedback target names and source mapping from all models in the graph.
@@ -130,18 +137,14 @@ void InputBuilderNode::configure()
   const auto builder_config_result =
     isaac_deploy_core::InputBuilder::Config::create_from_model_config(*model_config_result);
   if (!builder_config_result) {
-    RCLCPP_ERROR(
-      get_logger(), "Failed to parse InputBuilder config: %s",
-      builder_config_result.error().message.c_str());
-    return;
+    throw std::runtime_error(
+      "Failed to parse InputBuilder config: " + builder_config_result.error().message);
   }
 
   auto builder_result = isaac_deploy_core::InputBuilder::create(*builder_config_result);
   if (!builder_result) {
-    RCLCPP_ERROR(
-      get_logger(), "Failed to create InputBuilder: %s",
-      builder_result.error().message.c_str());
-    return;
+    throw std::runtime_error(
+      "Failed to create InputBuilder: " + builder_result.error().message);
   }
   input_builder_ = std::move(*builder_result);
 
@@ -223,7 +226,11 @@ void InputBuilderNode::create_subscription_groups(
     };
 
   // External inputs: create converters from registry by kind.
-  for (const auto & [source, kind] : source_to_kind) {
+  // Inputs with no declared kind (e.g. dangling tensor inputs in clean leapp
+  // exports such as the diffusion-policy initial_noise seed) fall back to the
+  // raw 'tensor' kind, which subscribes to a TensorList topic.
+  for (const auto & [source, raw_kind] : source_to_kind) {
+    const std::string kind = raw_kind.empty() ? "tensor" : raw_kind;
     const auto message_type = resolve_message_type(source);
     auto converter = registry.create_for_kind(kind, source, message_type);
     if (!converter) {

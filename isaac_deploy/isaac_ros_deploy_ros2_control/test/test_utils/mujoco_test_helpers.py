@@ -2,6 +2,18 @@
 
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """
 Shared test helpers and base test cases for MuJoCo integration tests.
@@ -25,11 +37,16 @@ import rclpy
 from rclpy.duration import Duration
 from rclpy.node import Node
 import rclpy.parameter
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from std_msgs.msg import Bool
+from std_srvs.srv import SetBool as SetGantryEnabled
 import tf2_ros
 
 # Minimum root-body height to consider the robot standing. Use 0.3m as a
 # conservative threshold that works for both G1 (~0.75m) and T1 (~0.7m).
 MIN_ROOT_HEIGHT_M = 0.3
+
+GANTRY_SERVICE = "/virtual_gantry/set_gantry_enabled"
 
 # Multi-reset configuration.
 RESET_COUNT = 4
@@ -80,6 +97,60 @@ def wait_for_controllers(
 
     test_case.fail(
         f"Controllers did not become active within {timeout_s}s: {controller_names}"
+    )
+
+
+def wait_for_is_active(
+    test_case: unittest.TestCase,
+    node: Node,
+    controller_names: list[str],
+    timeout_s: float,
+) -> None:
+    """
+    Wait for each listed controller to latch `True` on its `<name>/is_active`
+    topic.
+
+    Controllers with deferred internal activation (notably `InferenceController`,
+    which defers its core until the first `/cmd_vel` arrives) report lifecycle
+    `active` immediately but don't start writing commands until the core is
+    ready.  This helper subscribes to the controller's latched
+    `<controller>/is_active` topic (`std_msgs/Bool`) and blocks until every
+    listed controller has published `data=True`.  Use this *after*
+    `wait_for_controllers`, before gantry disable, so the gantry is released at
+    a moment when the policy is genuinely producing commands.
+    """
+    qos = QoSProfile(
+        depth=1,
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    )
+    active: dict[str, bool] = {name: False for name in controller_names}
+    subs = []
+    for name in controller_names:
+        def _callback(msg: Bool, _name: str = name) -> None:
+            if msg.data:
+                active[_name] = True
+        subs.append(node.create_subscription(Bool, f"/{name}/is_active", _callback, qos))
+
+    node.get_logger().info(
+        f"Waiting for controllers to report is_active=True: {controller_names}"
+    )
+    start = time.time()
+    while time.time() - start < timeout_s:
+        rclpy.spin_once(node, timeout_sec=0.1)
+        if all(active.values()):
+            node.get_logger().info(
+                f"Controllers is_active=True: {', '.join(controller_names)}"
+            )
+            for sub in subs:
+                node.destroy_subscription(sub)
+            return
+
+    pending = [name for name, is_active in active.items() if not is_active]
+    for sub in subs:
+        node.destroy_subscription(sub)
+    test_case.fail(
+        f"Controllers did not report is_active=True within {timeout_s}s: {pending}"
     )
 
 
@@ -241,10 +312,52 @@ def monitor_height(
     node.get_logger().info(f"Test passed! Minimum height observed: {min_height:.3f}m")
 
 
+def enable_gantry(node: Node, timeout_s: float = 10.0) -> bool:
+    """Enable the virtual gantry. Returns True if the service succeeded."""
+    client = node.create_client(SetGantryEnabled, GANTRY_SERVICE)
+    if not client.wait_for_service(timeout_sec=timeout_s):
+        node.get_logger().error(f"{GANTRY_SERVICE} not available")
+        return False
+    req = SetGantryEnabled.Request()
+    req.data = True
+    future = client.call_async(req)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+    result = future.result()
+    if result is None or not result.success:
+        node.get_logger().warning("enable_gantry: service call failed or timed out")
+        return False
+    node.get_logger().info("Gantry enabled")
+    return True
+
+
+def disable_gantry(node: Node) -> bool:
+    """Disable the virtual gantry. Returns True if the service succeeded."""
+    client = node.create_client(SetGantryEnabled, GANTRY_SERVICE)
+    if not client.wait_for_service(timeout_sec=5.0):
+        return False
+    req = SetGantryEnabled.Request()
+    req.data = False
+    future = client.call_async(req)
+    rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+    result = future.result()
+    if result is None or not result.success:
+        node.get_logger().warning("disable_gantry: service call failed or timed out")
+        return False
+    node.get_logger().info("Gantry disabled")
+    return True
+
+
 def _spin_for(node: Node, duration_s: float) -> None:
-    """Spin the node for a fixed duration while processing callbacks."""
-    end = time.time() + duration_s
-    while time.time() < end:
+    """Spin the node for a fixed duration of sim time while processing callbacks.
+
+    Uses the node's clock (sim time when ``use_sim_time=True``) so stabilization
+    waits scale with MuJoCo's actual progress rather than wall-clock; under CI
+    compute load the simulator runs slower than real-time and a wall-clock wait
+    expires before the robot has settled.
+    """
+    start = node.get_clock().now()
+    duration = Duration(seconds=duration_s)
+    while (node.get_clock().now() - start) < duration:
         rclpy.spin_once(node, timeout_sec=0.05)
 
 
@@ -263,12 +376,20 @@ class MujocoControllerManagerTestBase(unittest.TestCase):
     Subclasses may override:
         PUBLISH_CMD_VEL:           True to publish zero /cmd_vel at a fixed rate.
         CONTROLLER_STARTUP_WAIT_S: Seconds to wait for controllers to become active.
+        READY_CONTROLLERS:         Controllers that additionally publish a latched
+                                   `<name>/is_active` std_msgs/Bool once their
+                                   deferred core is producing commands.  Gantry
+                                   disable is deferred until every listed controller
+                                   has reported True.
+        STABILIZATION_WAIT_S:      Seconds to spin while the gantry is still holding
+                                   the robot, giving the policy time to warm up before
+                                   the gantry is released.
         TEST_DURATION_S:           Seconds to monitor height.
-        STABILIZATION_WAIT_S:      Seconds to wait after reset before monitoring.
         CMD_VEL_PUBLISH_PERIOD_S:  Timer period for /cmd_vel publishing.
     """
 
     CONTROLLERS: list[str] = []
+    READY_CONTROLLERS: list[str] = []
     PUBLISH_CMD_VEL: bool = False
     ROOT_FRAME: str
 
@@ -311,12 +432,16 @@ class MujocoControllerManagerTestBase(unittest.TestCase):
         wait_for_controllers(
             self, self.node, self.CONTROLLERS, self.CONTROLLER_STARTUP_WAIT_S
         )
-        reset_simulation(self, self.node, assert_on_failure=True)
+        if self.READY_CONTROLLERS:
+            wait_for_is_active(
+                self, self.node, self.READY_CONTROLLERS, self.CONTROLLER_STARTUP_WAIT_S
+            )
         spin_for(
             self.node,
             self.STABILIZATION_WAIT_S,
-            f"Waiting {self.STABILIZATION_WAIT_S}s for robot to stabilize after reset...",
+            f"Waiting {self.STABILIZATION_WAIT_S}s before releasing gantry...",
         )
+        self.assertTrue(disable_gantry(self.node))
         monitor_height(self, self.node, self.TEST_DURATION_S, root_frame=self.ROOT_FRAME)
 
 
@@ -330,14 +455,22 @@ class MujocoInferenceGraphTestBase(unittest.TestCase):
     Subclasses may override:
         PUBLISH_CMD_VEL:           True to publish zero /cmd_vel at a fixed rate.
         CONTROLLER_STARTUP_WAIT_S: Seconds to wait for controllers to become active.
+        READY_CONTROLLERS:         Controllers that additionally publish a latched
+                                   `<name>/is_active` std_msgs/Bool once their
+                                   deferred core is producing commands.  Gantry
+                                   disable is deferred until every listed controller
+                                   has reported True.
         PIPELINE_OUTPUT_TOPIC:     Topic to wait for first message on (pipeline ready signal).
         PIPELINE_OUTPUT_MSG_TYPE:  Message type for the pipeline output topic.
+        STABILIZATION_WAIT_S:      Seconds to spin while the gantry is still holding
+                                   the robot, giving the policy time to warm up before
+                                   the gantry is released.
         TEST_DURATION_S:           Seconds to monitor height.
-        STABILIZATION_WAIT_S:      Seconds to wait after reset before monitoring.
         CMD_VEL_PUBLISH_PERIOD_S:  Timer period for /cmd_vel publishing.
     """
 
     CONTROLLERS: list[str] = ["forward_joint_command_controller"]
+    READY_CONTROLLERS: list[str] = []
     PUBLISH_CMD_VEL: bool = False
     ROOT_FRAME: str
 
@@ -345,7 +478,7 @@ class MujocoInferenceGraphTestBase(unittest.TestCase):
     PIPELINE_OUTPUT_TOPIC: str = "/joint_commands"
     PIPELINE_OUTPUT_MSG_TYPE: type = JointCommand
     TEST_DURATION_S: float = 5.0
-    STABILIZATION_WAIT_S: float = 5.0
+    STABILIZATION_WAIT_S: float = 1.0
     CMD_VEL_PUBLISH_PERIOD_S: float = 0.05
 
     @classmethod
@@ -382,18 +515,22 @@ class MujocoInferenceGraphTestBase(unittest.TestCase):
         wait_for_controllers(
             self, self.node, self.CONTROLLERS, self.CONTROLLER_STARTUP_WAIT_S
         )
+        if self.READY_CONTROLLERS:
+            wait_for_is_active(
+                self, self.node, self.READY_CONTROLLERS, self.CONTROLLER_STARTUP_WAIT_S
+            )
         wait_for_first_message(
             self,
             self.node,
             self.PIPELINE_OUTPUT_MSG_TYPE,
             self.PIPELINE_OUTPUT_TOPIC,
         )
-        reset_simulation(self, self.node, assert_on_failure=False)
         spin_for(
             self.node,
             self.STABILIZATION_WAIT_S,
-            f"Waiting {self.STABILIZATION_WAIT_S}s for controller to stabilize after reset...",
+            f"Waiting {self.STABILIZATION_WAIT_S}s before releasing gantry...",
         )
+        self.assertTrue(disable_gantry(self.node))
         monitor_height(
             self, self.node, self.TEST_DURATION_S, root_frame=self.ROOT_FRAME, fail_early=True
         )

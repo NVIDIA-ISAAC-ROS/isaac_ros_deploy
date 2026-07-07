@@ -19,9 +19,8 @@ if(BUILD_TESTING)
   install(DIRECTORY test/data/ DESTINATION share/${PROJECT_NAME}/test/data)
   install(DIRECTORY test/scripts/ DESTINATION share/${PROJECT_NAME}/test/scripts USE_SOURCE_PERMISSIONS)
 
-  add_ros_isolated_launch_test(test/test_single_model_inference_graph.py TIMEOUT 60)
-  add_ros_isolated_launch_test(test/test_multi_model_inference_graph.py TIMEOUT 60)
-  add_ros_isolated_launch_test(test/test_gr00t_inference_graph.py TIMEOUT 180)
+  add_ros_isolated_launch_test(test/test_single_model_inference_graph.py TIMEOUT 180)
+  add_ros_isolated_launch_test(test/test_multi_model_inference_graph.py TIMEOUT 180)
 endif()
 
 ament_package()

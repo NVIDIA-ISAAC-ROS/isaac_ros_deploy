@@ -1,5 +1,17 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "isaac_ros_deploy_converters/converters/message_to_tensor_converter.hpp"
 
@@ -404,6 +416,11 @@ public:
     const int64_t w = image.width;
 
     const bool is_bgr = (image.encoding == "bgr8");
+    const bool is_rgb = (image.encoding == "rgb8");
+    if (!is_bgr && !is_rgb) {
+      throw std::runtime_error(
+        "ImageConverter only supports rgb8 and bgr8 encodings, got: " + image.encoding);
+    }
     const int64_t channels = 3;
 
     // Convert uint8 pixel data to float32 tensor [1, H, W, C].
@@ -418,6 +435,77 @@ public:
     }
 
     return tensor.unsqueeze(0);  // [1, H, W, C]
+  }
+};
+
+// ============================================================================
+// Single-body command converters (BodyCommand with one entry)
+// ============================================================================
+
+class BodyCommandPositionConverter : public MessageToTensorConverter
+{
+public:
+  std::string get_kind() const override {return "command/body/target_position";}
+  std::string get_message_type() const override
+  {
+    return "isaac_ros_deploy_interfaces/msg/BodyCommand";
+  }
+
+  torch::Tensor convert(const std::shared_ptr<rclcpp::SerializedMessage> & msg) override
+  {
+    isaac_ros_deploy_interfaces::msg::BodyCommand body_command;
+    rclcpp::Serialization<isaac_ros_deploy_interfaces::msg::BodyCommand> serializer;
+    serializer.deserialize_message(msg.get(), &body_command);
+
+    if (body_command.pose.empty()) {
+      throw std::runtime_error("BodyCommand message has no pose entries");
+    }
+
+    const auto & pos = body_command.pose[0].position;
+    return torch::tensor(
+      {{static_cast<float>(pos.x),
+        static_cast<float>(pos.y),
+        static_cast<float>(pos.z)}},
+      torch::kFloat32);
+  }
+
+  isaac_deploy_core::TensorSpec get_tensor_spec() const override
+  {
+    return {.names = {{}, {"x", "y", "z"}}};
+  }
+};
+
+class BodyCommandRotationConverter : public MessageToTensorConverter
+{
+public:
+  std::string get_kind() const override {return "command/body/target_rotation";}
+  std::string get_message_type() const override
+  {
+    return "isaac_ros_deploy_interfaces/msg/BodyCommand";
+  }
+
+  torch::Tensor convert(const std::shared_ptr<rclcpp::SerializedMessage> & msg) override
+  {
+    isaac_ros_deploy_interfaces::msg::BodyCommand body_command;
+    rclcpp::Serialization<isaac_ros_deploy_interfaces::msg::BodyCommand> serializer;
+    serializer.deserialize_message(msg.get(), &body_command);
+
+    if (body_command.pose.empty()) {
+      throw std::runtime_error("BodyCommand message has no pose entries");
+    }
+
+    const auto & ori = body_command.pose[0].orientation;
+    return torch::tensor(
+      {{static_cast<float>(ori.x),
+        static_cast<float>(ori.y),
+        static_cast<float>(ori.z),
+        static_cast<float>(ori.w)}},
+      torch::kFloat32);
+  }
+
+  isaac_deploy_core::TensorSpec get_tensor_spec() const override
+  {
+    return {.names = {{}, {"x", "y", "z", "w"}}};
   }
 };
 
@@ -491,6 +579,16 @@ void initialize_input_converters()
         "state/camera/image", "sensor_msgs/msg/Image",
         [](const std::string &) {
           return std::make_shared<ImageConverter>();
+        });
+      registry.register_converter(
+        "command/body/target_position", "isaac_ros_deploy_interfaces/msg/BodyCommand",
+        [](const std::string &) {
+          return std::make_shared<BodyCommandPositionConverter>();
+        });
+      registry.register_converter(
+        "command/body/target_rotation", "isaac_ros_deploy_interfaces/msg/BodyCommand",
+        [](const std::string &) {
+          return std::make_shared<BodyCommandRotationConverter>();
         });
     });
 }

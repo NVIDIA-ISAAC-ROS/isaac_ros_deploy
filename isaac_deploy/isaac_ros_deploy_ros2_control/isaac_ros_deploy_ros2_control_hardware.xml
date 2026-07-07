@@ -1,6 +1,6 @@
 <!--
- SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
- SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
 -->
 <library path="isaac_ros_deploy_ros2_control_hardware">
   <class name="isaac_ros_deploy_ros2_control/TopicSensorInterface"

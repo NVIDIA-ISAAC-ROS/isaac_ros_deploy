@@ -1,8 +1,21 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "isaac_ros_deploy_ros2_control/controllers/freeze_controller.hpp"
 
+#include "isaac_ros_deploy_ros2_control/utils/gain_utils.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/tensor_interface_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
@@ -20,8 +33,6 @@ controller_interface::CallbackReturn FreezeController::on_init()
 {
   try {
     auto_declare<std::vector<std::string>>("joints", std::vector<std::string>());
-    auto_declare<double>("kp", 1.0);  // Stiffness gain
-    auto_declare<double>("kd", 0.1);   // Damping gain
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to declare parameters: %s", e.what());
     return controller_interface::CallbackReturn::ERROR;
@@ -34,21 +45,22 @@ controller_interface::CallbackReturn FreezeController::on_configure(
   const rclcpp_lifecycle::State &)
 {
   joint_names_ = get_node()->get_parameter("joints").as_string_array();
-  kp_ = get_node()->get_parameter("kp").as_double();
-  kd_ = get_node()->get_parameter("kd").as_double();
 
   if (joint_names_.empty()) {
     RCLCPP_ERROR(get_node()->get_logger(), "No joints specified");
     return controller_interface::CallbackReturn::ERROR;
   }
 
+  per_joint_kp_ = utils::resolve_gains_from_params(*get_node(), "kp", joint_names_);
+  per_joint_kd_ = utils::resolve_gains_from_params(*get_node(), "kd", joint_names_);
+
   // Pre-allocate frozen positions vector.
   frozen_positions_.resize(joint_names_.size(), 0.0);
 
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "Configured FreezeController with %zu joints, kp=%.2f, kd=%.2f",
-    joint_names_.size(), kp_, kd_);
+    "Configured FreezeController with %zu joints",
+    joint_names_.size());
 
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -167,8 +179,8 @@ controller_interface::CallbackReturn FreezeController::on_activate(
 
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "FreezeController activated - holding %zu joints using impedance control (kp=%.2f, kd=%.2f)",
-    joint_names_.size(), kp_, kd_);
+    "FreezeController activated - holding %zu joints using impedance control",
+    joint_names_.size());
 
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -196,8 +208,8 @@ controller_interface::return_type FreezeController::update(
     (void)command_interfaces_[position_command_indices_[i]].set_value(frozen_positions_[i]);
     (void)command_interfaces_[velocity_command_indices_[i]].set_value(0.0);
     (void)command_interfaces_[effort_command_indices_[i]].set_value(0.0);
-    (void)command_interfaces_[kp_command_indices_[i]].set_value(kp_);
-    (void)command_interfaces_[kd_command_indices_[i]].set_value(kd_);
+    (void)command_interfaces_[kp_command_indices_[i]].set_value(per_joint_kp_[i]);
+    (void)command_interfaces_[kd_command_indices_[i]].set_value(per_joint_kd_[i]);
   }
 
   return controller_interface::return_type::OK;
