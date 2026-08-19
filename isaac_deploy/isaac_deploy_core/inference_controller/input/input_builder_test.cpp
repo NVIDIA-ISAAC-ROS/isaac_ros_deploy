@@ -19,14 +19,15 @@
 
 #include "isaac_deploy_core/inference_controller/config_parser.hpp"
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
-  TEST(InputBuilderTest, CreateSuccess) {
+TEST(InputBuilderTest, CreateSuccess) {
     InputBuilder::Config config {
-      .terms = {
-        {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
-        {.name = "joint_vel", .kind = "joint_vel", .shape = {1, 3}},
-      }
+    .terms = {
+      {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
+      {.name = "joint_vel", .kind = "joint_vel", .shape = {1, 3}},
+    }
     };
     auto result = InputBuilder::create(config);
     ASSERT_TRUE(result.has_value());
@@ -35,22 +36,22 @@ namespace isaac_deploy_core {
     EXPECT_EQ(keys.size(), 2);
     EXPECT_EQ(keys[0], "joint_pos");
     EXPECT_EQ(keys[1], "joint_vel");
-  }
+}
 
-  TEST(InputBuilderTest, ActivateAndAdvance) {
+TEST(InputBuilderTest, ActivateAndAdvance) {
     InputBuilder::Config config {
-      .terms = {
-        {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
-      }
+    .terms = {
+      {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
+    }
     };
     auto builder_result = InputBuilder::create(config);
     ASSERT_TRUE(builder_result.has_value());
     auto & builder = *builder_result;
 
-    std::vector < NamedTensor > inputs = {
-      {.name = "joint_pos", .tensor = torch::tensor({{1.0f, 2.0f, 3.0f}})},
+    std::vector<NamedTensor> inputs = {
+    {.name = "joint_pos", .tensor = torch::tensor({{1.0f, 2.0f, 3.0f}})},
     };
-    std::vector < TensorSpec > specs = {{}};
+    std::vector<TensorSpec> specs = {{}};
 
     auto activate_result = builder.activate(inputs, specs);
     ASSERT_TRUE(activate_result.has_value());
@@ -62,24 +63,24 @@ namespace isaac_deploy_core {
     EXPECT_EQ(outputs.size(), 1);
     EXPECT_GT(outputs.count("joint_pos"), 0u);
     EXPECT_TRUE(torch::allclose(outputs["joint_pos"], torch::tensor({{1.0f, 2.0f, 3.0f}})));
-  }
+}
 
-  TEST(InputBuilderTest, MultipleInputs) {
+TEST(InputBuilderTest, MultipleInputs) {
     InputBuilder::Config config {
-      .terms = {
-        {.name = "pos", .kind = "pos", .shape = {1, 2}},
-        {.name = "vel", .kind = "vel", .shape = {1, 2}},
-      }
+    .terms = {
+      {.name = "pos", .kind = "pos", .shape = {1, 2}},
+      {.name = "vel", .kind = "vel", .shape = {1, 2}},
+    }
     };
     auto builder_result = InputBuilder::create(config);
     ASSERT_TRUE(builder_result.has_value());
     auto & builder = *builder_result;
 
-    std::vector < NamedTensor > inputs = {
-      {.name = "pos", .tensor = torch::tensor({{1.0f, 2.0f}})},
-      {.name = "vel", .tensor = torch::tensor({{3.0f, 4.0f}})},
+    std::vector<NamedTensor> inputs = {
+    {.name = "pos", .tensor = torch::tensor({{1.0f, 2.0f}})},
+    {.name = "vel", .tensor = torch::tensor({{3.0f, 4.0f}})},
     };
-    std::vector < TensorSpec > specs = {{}, {}};
+    std::vector<TensorSpec> specs = {{}, {}};
 
     auto activate_result = builder.activate(inputs, specs);
     ASSERT_TRUE(activate_result.has_value());
@@ -91,15 +92,15 @@ namespace isaac_deploy_core {
     EXPECT_EQ(outputs.size(), 2);
     EXPECT_TRUE(torch::allclose(outputs["pos"], torch::tensor({{1.0f, 2.0f}})));
     EXPECT_TRUE(torch::allclose(outputs["vel"], torch::tensor({{3.0f, 4.0f}})));
-  }
+}
 
-  TEST(InputBuilderTest, GetRequiredInputKinds) {
+TEST(InputBuilderTest, GetRequiredInputKinds) {
     InputBuilder::Config config {
-      .terms = {
-        {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
-        {.name = "last_actions", .kind = "last_actions", .shape = {1, 3},
-          .output_key = "out"},
-      }
+    .terms = {
+      {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
+      {.name = "last_actions", .kind = "last_actions", .shape = {1, 3},
+        .output_key = "out"},
+    }
     };
     auto builder_result = InputBuilder::create(config);
     ASSERT_TRUE(builder_result.has_value());
@@ -113,16 +114,16 @@ namespace isaac_deploy_core {
     // Feedback term source defaults to output_key ("out").
     auto sources = builder_result->get_unique_source_names();
     EXPECT_EQ(sources.size(), 2);
-  }
+}
 
-  TEST(InputBuilderTest, KindBasedRouting) {
+TEST(InputBuilderTest, KindBasedRouting) {
     // Two terms share the same kind: current value and history.
     InputBuilder::Config config {
-      .terms = {
-        {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
-        {.name = "joint_pos_history", .kind = "joint_pos", .shape = {1, 2, 3},
-          .history_length = 2, .include_current_in_history = true},
-      }
+    .terms = {
+      {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
+      {.name = "joint_pos_history", .kind = "joint_pos", .shape = {1, 2, 3},
+        .history_length = 2, .include_current_in_history = true},
+    }
     };
     auto builder_result = InputBuilder::create(config);
     ASSERT_TRUE(builder_result.has_value());
@@ -134,10 +135,10 @@ namespace isaac_deploy_core {
     EXPECT_EQ(kinds[0], "joint_pos");
 
     // Activate with a single input.
-    std::vector < NamedTensor > inputs = {
-      {.name = "joint_pos", .tensor = torch::tensor({{1.0f, 2.0f, 3.0f}})},
+    std::vector<NamedTensor> inputs = {
+    {.name = "joint_pos", .tensor = torch::tensor({{1.0f, 2.0f, 3.0f}})},
     };
-    std::vector < TensorSpec > specs = {{}};
+    std::vector<TensorSpec> specs = {{}};
 
     auto activate_result = builder.activate(inputs, specs);
     ASSERT_TRUE(activate_result.has_value());
@@ -156,17 +157,17 @@ namespace isaac_deploy_core {
     EXPECT_TRUE(torch::allclose(outputs["joint_pos"], torch::tensor({{4.0f, 5.0f, 6.0f}})));
 
     // History term should have shape [1, 2, 3].
-    EXPECT_EQ(outputs["joint_pos_history"].sizes(), std::vector < int64_t > ({1, 2, 3}));
-  }
+    EXPECT_EQ(outputs["joint_pos_history"].sizes(), std::vector<int64_t>({1, 2, 3}));
+}
 
-  TEST(InputBuilderTest, GetRequiredInputKindsDeduplicates) {
+TEST(InputBuilderTest, GetRequiredInputKindsDeduplicates) {
     // Multiple terms with the same kind should produce a single required kind.
     InputBuilder::Config config {
-      .terms = {
-        {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
-        {.name = "joint_pos_history", .kind = "joint_pos", .shape = {1, 2, 3},
-          .history_length = 2},
-      }
+    .terms = {
+      {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
+      {.name = "joint_pos_history", .kind = "joint_pos", .shape = {1, 2, 3},
+        .history_length = 2},
+    }
     };
     auto builder_result = InputBuilder::create(config);
     ASSERT_TRUE(builder_result.has_value());
@@ -174,17 +175,17 @@ namespace isaac_deploy_core {
     auto kinds = builder_result->get_unique_kinds();
     EXPECT_EQ(kinds.size(), 1);
     EXPECT_EQ(kinds[0], "joint_pos");
-  }
+}
 
-  TEST(InputBuilderTest, SourceBasedRouting) {
+TEST(InputBuilderTest, SourceBasedRouting) {
     // Two terms with the same kind but different sources.
     InputBuilder::Config config {
-      .terms = {
-        {.name = "left_img", .kind = "image", .source = "left_image",
-          .shape = {1, 3}},
-        {.name = "right_img", .kind = "image", .source = "right_image",
-          .shape = {1, 3}},
-      }
+    .terms = {
+      {.name = "left_img", .kind = "image", .source = "left_image",
+        .shape = {1, 3}},
+      {.name = "right_img", .kind = "image", .source = "right_image",
+        .shape = {1, 3}},
+    }
     };
     auto builder_result = InputBuilder::create(config);
     ASSERT_TRUE(builder_result.has_value());
@@ -206,11 +207,11 @@ namespace isaac_deploy_core {
     EXPECT_EQ(source_to_kind["right_image"], "image");
 
     // Activate with two inputs named by source.
-    std::vector < NamedTensor > inputs = {
-      {.name = "left_image", .tensor = torch::tensor({{1.0f, 2.0f, 3.0f}})},
-      {.name = "right_image", .tensor = torch::tensor({{4.0f, 5.0f, 6.0f}})},
+    std::vector<NamedTensor> inputs = {
+    {.name = "left_image", .tensor = torch::tensor({{1.0f, 2.0f, 3.0f}})},
+    {.name = "right_image", .tensor = torch::tensor({{4.0f, 5.0f, 6.0f}})},
     };
-    std::vector < TensorSpec > specs = {{}, {}};
+    std::vector<TensorSpec> specs = {{}, {}};
 
     auto activate_result = builder.activate(inputs, specs);
     ASSERT_TRUE(activate_result.has_value());
@@ -222,14 +223,14 @@ namespace isaac_deploy_core {
     EXPECT_EQ(outputs.size(), 2);
     EXPECT_TRUE(torch::allclose(outputs["left_img"], torch::tensor({{1.0f, 2.0f, 3.0f}})));
     EXPECT_TRUE(torch::allclose(outputs["right_img"], torch::tensor({{4.0f, 5.0f, 6.0f}})));
-  }
+}
 
-  TEST(InputBuilderTest, SourceDefaultsToKind) {
+TEST(InputBuilderTest, SourceDefaultsToKind) {
     // When source is not specified, it defaults to kind.
     InputBuilder::Config config {
-      .terms = {
-        {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
-      }
+    .terms = {
+      {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
+    }
     };
     auto builder_result = InputBuilder::create(config);
     ASSERT_TRUE(builder_result.has_value());
@@ -241,16 +242,16 @@ namespace isaac_deploy_core {
     auto source_to_kind = builder_result->get_source_to_kind_map();
     EXPECT_EQ(source_to_kind.size(), 1);
     EXPECT_EQ(source_to_kind["joint_pos"], "joint_pos");
-  }
+}
 
-  TEST(InputBuilderTest, FeedbackTermAsRegularInput) {
+TEST(InputBuilderTest, FeedbackTermAsRegularInput) {
     // Feedback term (output_key set) is treated as a regular input.
     InputBuilder::Config config {
-      .terms = {
-        {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
-        {.name = "last_actions", .kind = "last_actions", .shape = {1, 3},
-          .output_key = "prev_output"},
-      }
+    .terms = {
+      {.name = "joint_pos", .kind = "joint_pos", .shape = {1, 3}},
+      {.name = "last_actions", .kind = "last_actions", .shape = {1, 3},
+        .output_key = "prev_output"},
+    }
     };
     auto builder_result = InputBuilder::create(config);
     ASSERT_TRUE(builder_result.has_value());
@@ -262,11 +263,11 @@ namespace isaac_deploy_core {
     EXPECT_EQ(feedback[0], "prev_output");
 
     // Activate with both external and feedback inputs.
-    std::vector < NamedTensor > inputs = {
-      {.name = "joint_pos", .tensor = torch::tensor({{1.0f, 2.0f, 3.0f}})},
-      {.name = "prev_output", .tensor = torch::zeros({1, 3})},
+    std::vector<NamedTensor> inputs = {
+    {.name = "joint_pos", .tensor = torch::tensor({{1.0f, 2.0f, 3.0f}})},
+    {.name = "prev_output", .tensor = torch::zeros({1, 3})},
     };
-    std::vector < TensorSpec > specs = {{}, {}};
+    std::vector<TensorSpec> specs = {{}, {}};
 
     auto activate_result = builder.activate(inputs, specs);
     ASSERT_TRUE(activate_result.has_value());
@@ -280,12 +281,12 @@ namespace isaac_deploy_core {
     EXPECT_EQ(outputs.size(), 2);
     EXPECT_TRUE(torch::allclose(outputs["joint_pos"], torch::tensor({{1.0f, 2.0f, 3.0f}})));
     EXPECT_TRUE(torch::allclose(outputs["last_actions"], torch::tensor({{7.0f, 8.0f, 9.0f}})));
-  }
+}
 
-  TEST(InputBuilderTest, CreateFromYamlWithFeedbackConnections) {
-    // Feedback connections are applied by create_from_model_config from ModelConfig.
+TEST(InputBuilderTest, CreateFromYamlWithFeedbackFlow) {
+    // Feedback flow is applied by create_from_model_config from ModelConfig.
     auto yaml =
-      YAML::Load(
+    YAML::Load(
       R"(
       models:
         policy:
@@ -303,7 +304,7 @@ namespace isaac_deploy_core {
             kind: actions
             shape: [1, 3]
       pipeline:
-        feedback_connections:
+        feedback_flow:
           policy/actions: [policy/last_actions]
         data_flow: {}
     )");
@@ -319,7 +320,7 @@ namespace isaac_deploy_core {
     auto builder_result = InputBuilder::create(*config_result);
     ASSERT_TRUE(builder_result.has_value());
 
-    // The feedback term should have output_key set by feedback_connections.
+    // The feedback term should have output_key set by feedback_flow.
     auto feedback = builder_result->get_feedback_input_names();
     EXPECT_EQ(feedback.size(), 1);
     EXPECT_EQ(feedback[0], "actions");
@@ -332,6 +333,6 @@ namespace isaac_deploy_core {
     // Source of feedback term should be the output name.
     auto sources = builder_result->get_unique_source_names();
     EXPECT_EQ(sources.size(), 2);
-  }
+}
 
 }  // namespace isaac_deploy_core

@@ -240,14 +240,16 @@ TEST(RosSafetyControllerTest, LatchEmergencyKeepsFirstReasonAndDoesNotMarkSecond
   SafetyControllerTestAccess::latch_emergency(controller, "velocity threshold exceeded");
 
   EXPECT_TRUE(SafetyControllerTestAccess::emergency_switch_client(controller).latched());
-  EXPECT_EQ(SafetyControllerTestAccess::emergency_reason(controller), "velocity threshold exceeded");
+  EXPECT_EQ(SafetyControllerTestAccess::emergency_reason(controller),
+    "velocity threshold exceeded");
   EXPECT_TRUE(SafetyControllerTestAccess::emergency_switch_client(controller).pending());
   EXPECT_FALSE(SafetyControllerTestAccess::emergency_switch_client(controller).in_flight());
 
   SafetyControllerTestAccess::latch_emergency(controller, "second violation");
 
   EXPECT_TRUE(SafetyControllerTestAccess::emergency_switch_client(controller).latched());
-  EXPECT_EQ(SafetyControllerTestAccess::emergency_reason(controller), "velocity threshold exceeded");
+  EXPECT_EQ(SafetyControllerTestAccess::emergency_reason(controller),
+    "velocity threshold exceeded");
   EXPECT_TRUE(SafetyControllerTestAccess::emergency_switch_client(controller).pending());
   EXPECT_FALSE(SafetyControllerTestAccess::emergency_switch_client(controller).in_flight());
 }

@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,44 +26,51 @@
 
 #include "isaac_deploy_core/core/error.hpp"
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
 /// Model configuration extracted from a graph-pipeline YAML file.
 ///
 /// Each model entry in the YAML contains `inputs`, `outputs`, and optionally
 /// `parameters` sections.
-  struct ModelConfig
-  {
+struct ModelConfig
+{
     /// YAML sequence of input term configurations.
-    YAML::Node inputs;
+  YAML::Node inputs;
     /// YAML sequence of output term configurations.
-    YAML::Node outputs;
+  YAML::Node outputs;
     /// Path to the model file (empty if not specified).
-    std::filesystem::path model_path;
+  std::filesystem::path model_path;
     /// Inference backend, e.g. "onnx" (empty if not specified).
-    std::string backend;
-    /// Feedback connections: output_name -> [input_name, ...] (model prefix stripped).
-    std::unordered_map < std::string, std::vector < std::string >> feedback_connections;
-  };
+  std::string backend;
+    /// Feedback flow: output_name -> [input_name, ...] (model prefix stripped).
+  std::unordered_map<std::string, std::vector<std::string>> feedback_flow;
+};
 
 /// Multi-model graph configuration extracted from a graph-pipeline YAML file.
 ///
 /// Contains per-model configs and pipeline-level connectivity (data flow
 /// between models, dangling inputs/outputs, feedback connections).
-  struct GraphConfig
-  {
+struct GraphConfig
+{
     /// Model configs in YAML insertion order (name, config).
-    std::vector < std::pair < std::string, ModelConfig >> models;
+  std::vector<std::pair<std::string, ModelConfig>> models;
 
     /// Data flow connections: "model_a/output" -> ["model_b/input", ...].
-    std::unordered_map < std::string, std::vector < std::string >> data_flow;
-  };
+  std::unordered_map<std::string, std::vector<std::string>> data_flow;
+
+    /// Feedback flow connections: "model/output" -> ["model/input", ...].
+  std::unordered_map<std::string, std::vector<std::string>> feedback_flow;
+
+    /// Optional path to upstream LEAPP feedback initial values safetensors file.
+  std::filesystem::path initial_values_path;
+};
 
 /// Parse the full graph configuration from a graph-pipeline YAML config.
 ///
 /// Supports single-model and multi-model configs. Returns per-model configs
 /// and pipeline connectivity information.
-  expected < GraphConfig > parse_graph_config(const YAML::Node & root);
+expected<GraphConfig> parse_graph_config(const YAML::Node & root);
 
 /// Merge a GraphConfig into a single ModelConfig for InputBuilder/OutputBuilder.
 ///
@@ -71,8 +79,8 @@ namespace isaac_deploy_core {
 /// using the pipeline section to determine which inputs/outputs are dangling.
 /// Data-flow target inputs and feedback inputs are excluded from the merged
 /// config (they are handled by InferenceRunnerNodes directly).
-  expected < ModelConfig > merge_graph_to_model_config(
-    const GraphConfig & graph,
-    const YAML::Node & root);
+expected<ModelConfig> merge_graph_to_model_config(
+  const GraphConfig & graph,
+  const YAML::Node & root);
 
 }  // namespace isaac_deploy_core

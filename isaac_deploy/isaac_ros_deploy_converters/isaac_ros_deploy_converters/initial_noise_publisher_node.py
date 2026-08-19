@@ -18,9 +18,9 @@
 """ROS2 node that publishes random noise tensors for diffusion-based policies.
 
 Some policies (e.g. GR00T) use a diffusion action head that requires
-random initial noise as an input. This node finds dangling inputs named
+random initial noise as an input. This node finds graph inputs named
 ``initial_noise`` (i.e. listed under ``pipeline.inputs.<model>`` in the
-exported config — meaning they are not fed by any other model and must be
+exported config, meaning they are not fed by any other model and must be
 supplied externally), extracts their shape/dtype, and publishes seeded
 random tensors at a fixed rate.
 
@@ -45,17 +45,17 @@ _INITIAL_NOISE_INPUT_NAME = 'initial_noise'
 
 
 def _find_initial_noise_inputs(config: dict) -> list[dict]:
-    """Find dangling model inputs named ``initial_noise``.
+    """Find graph-level model inputs named ``initial_noise``.
 
-    Dangling inputs are those listed under ``pipeline.inputs.<model>``
-    in the config — they are not produced by any upstream model via
-    ``data_flow`` and therefore must be published by an external source.
+    Graph inputs are listed under ``pipeline.inputs.<model>`` in the config.
+    They are not produced by an upstream model via ``data_flow`` and therefore
+    must be published by an external source.
     """
     pipeline_inputs = (config.get('pipeline') or {}).get('inputs') or {}
     models = config.get('models') or {}
     results = []
-    for model_name, dangling_names in pipeline_inputs.items():
-        if _INITIAL_NOISE_INPUT_NAME not in (dangling_names or []):
+    for model_name, graph_input_names in pipeline_inputs.items():
+        if _INITIAL_NOISE_INPUT_NAME not in (graph_input_names or []):
             continue
         for inp in (models.get(model_name) or {}).get('inputs', []):
             if inp.get('name') == _INITIAL_NOISE_INPUT_NAME:
@@ -91,7 +91,7 @@ class InitialNoisePublisherNode(Node):
         self.noise_inputs = _find_initial_noise_inputs(config)
         if not self.noise_inputs:
             raise RuntimeError(
-                f"No dangling input named '{_INITIAL_NOISE_INPUT_NAME}' "
+                f"No graph input named '{_INITIAL_NOISE_INPUT_NAME}' "
                 f'found under pipeline.inputs in {config_path}'
             )
 

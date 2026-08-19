@@ -17,7 +17,8 @@
 
 #include <gtest/gtest.h>
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
 TEST(TritonRunnerTest, CreateFailsWithNonexistentFile) {
   TritonRunnerConfig config{.model_path = "/nonexistent/path/model.onnx"};

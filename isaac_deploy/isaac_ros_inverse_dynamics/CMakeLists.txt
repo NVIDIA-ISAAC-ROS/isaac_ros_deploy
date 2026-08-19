@@ -9,6 +9,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(Eigen3 REQUIRED)
 find_package(pinocchio REQUIRED)
 
 add_library(inverse_dynamics_solver SHARED
@@ -20,6 +21,7 @@ target_include_directories(inverse_dynamics_solver PUBLIC
 )
 target_compile_features(inverse_dynamics_solver PUBLIC cxx_std_17)
 target_link_libraries(inverse_dynamics_solver PUBLIC
+  Eigen3::Eigen
   pinocchio::pinocchio
 )
 
@@ -37,7 +39,7 @@ install(
 
 ament_export_targets(inverse_dynamics_solver_targets HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
-ament_export_dependencies(pinocchio)
+ament_export_dependencies(Eigen3 pinocchio)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

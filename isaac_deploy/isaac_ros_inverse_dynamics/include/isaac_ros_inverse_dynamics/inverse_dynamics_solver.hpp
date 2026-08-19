@@ -18,8 +18,7 @@
 #include <vector>
 
 #include "Eigen/Core"
-#include "pinocchio/multibody/data.hpp"
-#include "pinocchio/multibody/model.hpp"
+#include "pinocchio/multibody.hpp"
 
 namespace isaac_ros_inverse_dynamics
 {
@@ -47,6 +46,11 @@ public:
 
   /// Number of controller joints; the expected size of q, v, a and tau.
   size_t num_joints() const {return num_joints_;}
+
+  /// Number of controller joints actually present in the model (<= num_joints()).
+  /// Joints absent from the model are skipped and receive tau = 0; compare against
+  /// num_joints() to detect an incomplete inverse-dynamics map.
+  size_t num_mapped_joints() const {return mappings_.size();}
 
   /// Full inverse dynamics (RNEA): tau = M(q)*a + C(q,v)*v + G(q). All four are in
   /// joint_names order and sized num_joints(). Joints absent from the model receive

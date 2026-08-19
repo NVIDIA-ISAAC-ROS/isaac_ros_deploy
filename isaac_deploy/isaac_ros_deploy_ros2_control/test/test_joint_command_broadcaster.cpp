@@ -56,6 +56,18 @@ protected:
     broadcaster_ = std::make_unique<JointCommandBroadcaster>();
   }
 
+  void TearDown() override
+  {
+    // The controller owns loaned interfaces that point into state_interfaces_.
+    // Release them before the fixture storage is destroyed.
+    if (broadcaster_) {
+      broadcaster_->release_interfaces();
+      broadcaster_.reset();
+    }
+    state_interfaces_.clear();
+    values_.clear();
+  }
+
   /// Initialize the broadcaster's underlying ROS node.
   void init_broadcaster(const std::string & name = "test_broadcaster")
   {

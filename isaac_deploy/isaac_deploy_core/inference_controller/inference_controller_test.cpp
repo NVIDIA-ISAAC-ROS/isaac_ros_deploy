@@ -17,43 +17,47 @@
 
 #include <gtest/gtest.h>
 
-namespace isaac_deploy_core {
+#include <utility>
 
-  namespace {
+namespace isaac_deploy_core
+{
+
+namespace
+{
 
     /// Create a minimal InferenceControllerConfig for testing.
-    InferenceControllerConfig make_test_config(const std::string & runner_type)
-    {
-      return {
-               .inputs = {.terms = {{.name = "input", .kind = "input", .shape = {1, 3}}}},
-               .outputs = {.terms = {{.name = "output", .kind = "output", .shape = {1, 3}}}},
-               .runner = {.model_path = "", .runner_type = runner_type},
-      };
-    }
+InferenceControllerConfig make_test_config(const std::string & runner_type)
+{
+  return {
+    .inputs = {.terms = {{.name = "input", .kind = "input", .shape = {1, 3}}}},
+    .outputs = {.terms = {{.name = "output", .kind = "output", .shape = {1, 3}}}},
+    .runner = {.model_path = "", .runner_type = runner_type},
+  };
+}
 
-  }  // namespace
+}    // namespace
 
-  TEST(InferenceControllerTest, CreateFailsWithInvalidRunner) {
+TEST(InferenceControllerTest, CreateFailsWithInvalidRunner) {
     auto result = InferenceController::create(make_test_config("invalid"));
     EXPECT_FALSE(result.has_value());
-  }
+}
 
-  TEST(InferenceControllerTest, CreateSuccess) {
+TEST(InferenceControllerTest, CreateSuccess) {
     auto result = InferenceController::create(make_test_config("mock"));
     ASSERT_TRUE(result.has_value());
-  }
+}
 
-  TEST(InferenceControllerTest, ActivateAndAdvance) {
+TEST(InferenceControllerTest, ActivateAndAdvance) {
     auto controller_result = InferenceController::create(make_test_config("mock"));
     ASSERT_TRUE(controller_result.has_value());
     auto & controller = *controller_result;
 
-    std::vector < NamedTensor > inputs = {
-      {.name = "input", .tensor = torch::tensor({{1.0f, 2.0f, 3.0f}})},
+    std::vector<NamedTensor> inputs = {
+    {.name = "input", .tensor = torch::tensor({{1.0f, 2.0f, 3.0f}})},
     };
-    std::vector < TensorSpec > input_specs = {{}};
-    std::vector < TensorSpec > output_specs = {{}};
-    std::vector < NamedTensor > outputs = {{.name = "output", .tensor = torch::zeros({1, 3})}};
+    std::vector<TensorSpec> input_specs = {{}};
+    std::vector<TensorSpec> output_specs = {{}};
+    std::vector<NamedTensor> outputs = {{.name = "output", .tensor = torch::zeros({1, 3})}};
 
     auto activate_result = controller.activate(inputs, input_specs, output_specs, outputs);
     ASSERT_TRUE(activate_result.has_value());
@@ -63,25 +67,74 @@ namespace isaac_deploy_core {
 
     // Mock runner copies input to output.
     EXPECT_TRUE(torch::allclose(outputs[0].tensor, torch::tensor({{1.0f, 2.0f, 3.0f}})));
-  }
+}
 
-  TEST(InferenceControllerTest, Deactivate) {
+TEST(InferenceControllerTest, UsesInitialFeedbackValueOnFirstAdvance) {
+    InferenceControllerConfig config{
+    .inputs = {.terms = {{.name = "previous_output", .shape = {1, 3}, .output_key = "output"}}},
+    .outputs = {.terms = {{.name = "output", .kind = "output", .shape = {1, 3}}}},
+    .runner = {.model_path = "", .runner_type = "mock"},
+    .feedback_initial_values = {{"output", torch::tensor({{4.0f, 5.0f, 6.0f}})}},
+    };
+
+    auto controller_result = InferenceController::create(std::move(config));
+    ASSERT_TRUE(controller_result.has_value());
+    auto & controller = *controller_result;
+
+    std::vector<NamedTensor> inputs;
+    std::vector<TensorSpec> input_specs;
+    std::vector<TensorSpec> output_specs = {{}};
+    std::vector<NamedTensor> outputs = {{.name = "output", .tensor = torch::zeros({1, 3})}};
+
+    auto activate_result = controller.activate(inputs, input_specs, output_specs, outputs);
+    ASSERT_TRUE(activate_result.has_value());
+
+    auto advance_result = controller.advance(inputs, outputs);
+    ASSERT_TRUE(advance_result.has_value());
+
+    EXPECT_TRUE(torch::allclose(outputs[0].tensor, torch::tensor({{4.0f, 5.0f, 6.0f}})));
+}
+
+TEST(InferenceControllerTest, InitialFeedbackValueWithWrongShapeFailsActivation) {
+    InferenceControllerConfig config{
+    .inputs = {.terms = {{.name = "previous_output", .shape = {1, 3}, .output_key = "output"}}},
+    .outputs = {.terms = {{.name = "output", .kind = "output", .shape = {1, 3}}}},
+    .runner = {.model_path = "", .runner_type = "mock"},
+    .feedback_initial_values = {{"output", torch::tensor({{4.0f, 5.0f}})}},
+    };
+
+    auto controller_result = InferenceController::create(std::move(config));
+    ASSERT_TRUE(controller_result.has_value());
+    auto & controller = *controller_result;
+
+    std::vector<NamedTensor> inputs;
+    std::vector<TensorSpec> input_specs;
+    std::vector<TensorSpec> output_specs = {{}};
+    std::vector<NamedTensor> outputs = {{.name = "output", .tensor = torch::zeros({1, 3})}};
+
+    auto activate_result = controller.activate(inputs, input_specs, output_specs, outputs);
+    ASSERT_FALSE(activate_result.has_value());
+    EXPECT_NE(activate_result.error().message.find("does not match"), std::string::npos)
+      << activate_result.error().message;
+}
+
+TEST(InferenceControllerTest, Deactivate) {
     auto controller_result = InferenceController::create(make_test_config("mock"));
     ASSERT_TRUE(controller_result.has_value());
     auto & controller = *controller_result;
 
-    std::vector < NamedTensor > inputs = {
-      {.name = "input", .tensor = torch::ones({1, 3})},
+    std::vector<NamedTensor> inputs = {
+    {.name = "input", .tensor = torch::ones({1, 3})},
     };
-    std::vector < TensorSpec > input_specs = {{}};
-    std::vector < TensorSpec > output_specs = {{}};
-    std::vector < NamedTensor > outputs = {{.name = "output", .tensor = torch::zeros({1, 3})}};
+    std::vector<TensorSpec> input_specs = {{}};
+    std::vector<TensorSpec> output_specs = {{}};
+    std::vector<NamedTensor> outputs = {{.name = "output", .tensor = torch::zeros({1, 3})}};
 
     auto activate_result = controller.activate(inputs, input_specs, output_specs, outputs);
     ASSERT_TRUE(activate_result.has_value());
 
     auto deactivate_result = controller.deactivate();
     ASSERT_TRUE(deactivate_result.has_value());
-  }
+}
 
 }  // namespace isaac_deploy_core

@@ -30,12 +30,6 @@
 
 models:
   model_a:
-    formatting:
-      input_format: [ai1, ai2, ai3]
-      output_format:
-        ao1: ao1
-        ao2: ao2
-
     inputs:
     - name: ai1
       kind: state/joint/position
@@ -66,17 +60,9 @@ models:
 
     parameters:
       model_path: model_a.onnx
-      backend: triton
-      device: cuda
+      backend: onnx
 
   model_b:
-    formatting:
-      input_format: [bi1, bi2]
-      output_format:
-        bo1: bo1
-        bo2: bo2
-        bo3: bo3
-
     inputs:
     - name: bi1
       kind: data_flow/ao1
@@ -107,8 +93,7 @@ models:
 
     parameters:
       model_path: model_b.onnx
-      backend: triton
-      device: cuda
+      backend: onnx
 
 pipeline:
   inputs:
@@ -117,7 +102,7 @@ pipeline:
   outputs:
     model_b: [bo1]
 
-  feedback_connections:
+  feedback_flow:
     model_a/ao2: [model_a/ai2]
     model_b/bo3: [model_a/ai3]
     model_b/bo2: [model_b/bi2]

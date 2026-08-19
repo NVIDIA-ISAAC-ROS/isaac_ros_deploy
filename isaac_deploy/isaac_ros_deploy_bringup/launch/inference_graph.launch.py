@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -106,6 +107,11 @@ def generate_launch_description():
                         'BodyCommand -> body_commands, Twist -> cmd_vel).',
         ),
         DeclareLaunchArgument(
+            'triton_cpu_models',
+            default_value='',
+            description='Comma-separated LEAPP model names to run on Triton CPU.',
+        ),
+        DeclareLaunchArgument(
             'use_sim_time',
             default_value='false',
             description='Run the pipeline nodes on sim time so their clock '
@@ -132,6 +138,13 @@ def csv_string_to_dict(mapping_str: str, prefix: str) -> dict[str, str]:
     return params
 
 
+def csv_string_to_list(csv_str: str) -> list[str]:
+    """Parse a comma-separated string into a list of non-empty values."""
+    if not csv_str:
+        return []
+    return [entry.strip() for entry in csv_str.split(',') if entry.strip()]
+
+
 def _launch(context):
     config_path = LaunchConfiguration('config_path').perform(context)
 
@@ -152,6 +165,11 @@ def _launch(context):
     output_to_topic_params = csv_string_to_dict(
         LaunchConfiguration('output_to_topic').perform(context),
         'output_to_topic',
+    )
+    triton_cpu_models = set(
+        csv_string_to_list(
+            LaunchConfiguration('triton_cpu_models').perform(context),
+        )
     )
 
     use_sim_time = (
@@ -190,7 +208,11 @@ def _launch(context):
     else:
         repo_dir = Path(tempfile.gettempdir()) / f'triton_repo_{config_file.stem}'
     try:
-        repo = create_triton_model_repo(config_file, repo_dir)
+        repo = create_triton_model_repo(
+            config_file,
+            repo_dir,
+            cpu_models=triton_cpu_models,
+        )
     except FileNotFoundError as e:
         raise RuntimeError(
             f'Failed to create Triton model repo: {e}. '

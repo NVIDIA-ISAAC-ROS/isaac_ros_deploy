@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,6 +25,7 @@
 #include "rclcpp_components/register_node_macro.hpp"
 
 #include "isaac_deploy_core/inference_controller/config_parser.hpp"
+#include "isaac_deploy_core/inference_controller/safetensors_loader.hpp"
 #include "isaac_ros_deploy_converters/converters/message_to_tensor_converter_nodes.hpp"
 #include "isaac_ros_deploy_converters/utils/tensor_list_utils.hpp"
 
@@ -96,7 +98,7 @@ void InputBuilderNode::configure()
   std::unordered_set<std::string> feedback_target_names;
   std::unordered_map<std::string, std::string> feedback_source_map;  // input_name -> output_name
   for (const auto & [model_name, model_config] : graph_result->models) {
-    for (const auto & [output_name, input_names] : model_config.feedback_connections) {
+    for (const auto & [output_name, input_names] : model_config.feedback_flow) {
       for (const auto & name : input_names) {
         feedback_target_names.insert(name);
         feedback_source_map[name] = output_name;
@@ -121,8 +123,8 @@ void InputBuilderNode::configure()
     }
 
     for (const auto & [model_name, model_config] : graph_result->models) {
-      for (const auto & [output_name, input_names] : model_config.feedback_connections) {
-        model_config_result->feedback_connections[output_name] = input_names;
+      for (const auto & [output_name, input_names] : model_config.feedback_flow) {
+        model_config_result->feedback_flow[output_name] = input_names;
       }
       for (const auto & input : model_config.inputs) {
         if (feedback_target_names.contains(input["name"].as<std::string>())) {
@@ -159,7 +161,15 @@ void InputBuilderNode::configure()
     }
   }
 
-  create_subscription_groups(feedback_dtypes);
+  auto feedback_initial_values_result = isaac_deploy_core::load_feedback_initial_values(
+    *graph_result, config_path_);
+  if (!feedback_initial_values_result) {
+    throw std::runtime_error(
+      "Failed to load feedback initial values: " +
+      feedback_initial_values_result.error().message);
+  }
+
+  create_subscription_groups(feedback_dtypes, *feedback_initial_values_result);
 
   // Create single output publisher for the bundled TensorList.
   const auto output_topic = get_parameter("output_topic").as_string();
@@ -178,7 +188,8 @@ void InputBuilderNode::configure()
 }
 
 void InputBuilderNode::create_subscription_groups(
-  const std::unordered_map<std::string, torch::Dtype> & feedback_dtypes)
+  const std::unordered_map<std::string, torch::Dtype> & feedback_dtypes,
+  const isaac_deploy_core::TensorDict & feedback_initial_values)
 {
   const auto source_to_kind = input_builder_->get_source_to_kind_map();
   auto & registry = MessageToTensorConverterRegistry::instance();
@@ -242,17 +253,28 @@ void InputBuilderNode::create_subscription_groups(
     add_to_group(source, resolve_topic(source), converter);
   }
 
-  // Feedback inputs: subscribe to inference output topic with zero-initialized tensors.
+  // Feedback inputs: subscribe to inference output topic with LEAPP initial values
+  // when present, otherwise fall back to zero-initialized tensors.
   const auto feedback_names = input_builder_->get_feedback_input_names();
   const auto feedback_shapes = input_builder_->get_feedback_input_shapes();
   const std::string feedback_topic = "output_tensors";
 
   for (size_t i = 0; i < feedback_names.size(); ++i) {
     auto converter = std::make_shared<TensorListConverter>(feedback_names[i]);
-    const auto dtype_it = feedback_dtypes.find(feedback_names[i]);
-    const auto dtype = dtype_it != feedback_dtypes.end() ? dtype_it->second : torch::kFloat32;
-    auto zero_tensor = torch::zeros(feedback_shapes[i], dtype);
-    add_to_group(feedback_names[i], feedback_topic, converter, zero_tensor);
+    auto initial_tensor_it = feedback_initial_values.find(feedback_names[i]);
+    if (initial_tensor_it != feedback_initial_values.end()) {
+      if (initial_tensor_it->second.sizes().vec() != feedback_shapes[i]) {
+        throw std::runtime_error(
+          "Initial feedback value for '" + feedback_names[i] +
+          "' has shape that does not match the configured feedback input");
+      }
+      add_to_group(feedback_names[i], feedback_topic, converter, initial_tensor_it->second);
+    } else {
+      const auto dtype_it = feedback_dtypes.find(feedback_names[i]);
+      const auto dtype = dtype_it != feedback_dtypes.end() ? dtype_it->second : torch::kFloat32;
+      add_to_group(feedback_names[i], feedback_topic, converter,
+          torch::zeros(feedback_shapes[i], dtype));
+    }
   }
 
   // Create subscriptions for each group.

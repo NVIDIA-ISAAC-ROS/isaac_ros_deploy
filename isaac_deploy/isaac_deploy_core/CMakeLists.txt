@@ -19,6 +19,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(tl_expected REQUIRED)
+find_package(nlohmann_json REQUIRED)
 
 # Find LibTorch (installed via pip in the Docker image).
 # Use Python to discover torch's cmake config path since pip installs
@@ -319,6 +320,27 @@ target_link_libraries(config_parser PUBLIC
   yaml-cpp
 )
 
+# inference_controller::safetensors_loader
+add_library(safetensors_loader SHARED
+  inference_controller/safetensors_loader.cpp
+)
+target_include_directories(safetensors_loader PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+  $<BUILD_INTERFACE:${BUILD_INCLUDE_DIR}>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(safetensors_loader PUBLIC
+  config_parser
+  types
+  expected
+  ${TORCH_LIBRARIES}
+  nlohmann_json::nlohmann_json
+)
+set_target_properties(safetensors_loader PROPERTIES
+  INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+)
+
 # =============================================================================
 # Inference Controller
 # =============================================================================
@@ -362,6 +384,7 @@ install(
     triton_runner
     inference_runner
     config_parser
+    safetensors_loader
     inference_controller
   EXPORT isaac_deploy_core_targets
   ARCHIVE DESTINATION lib
@@ -394,7 +417,7 @@ install(
 
 # Export targets for downstream packages.
 ament_export_targets(isaac_deploy_core_targets HAS_LIBRARY_TARGET)
-ament_export_dependencies(yaml-cpp tl_expected rclcpp)
+ament_export_dependencies(yaml-cpp tl_expected rclcpp nlohmann_json)
 
 # Export LibTorch and ONNX Runtime for downstream packages.
 # Configure the extras file from template to the build directory
@@ -413,6 +436,10 @@ install(FILES
 # Register the configured extras file (relative to build directory)
 list(
   APPEND ${PROJECT_NAME}_CONFIG_EXTRAS
+  "${CMAKE_CURRENT_BINARY_DIR}/cmake/isaac_deploy_core-extras.cmake"
+)
+list(
+  APPEND ${PROJECT_NAME}_CONFIG_EXTRAS_POST
   "${CMAKE_CURRENT_BINARY_DIR}/cmake/isaac_deploy_core-extras.cmake"
 )
 
@@ -479,6 +506,14 @@ if(BUILD_TESTING)
   # Config parser test.
   ament_add_gtest(config_parser_test inference_controller/config_parser_test.cpp)
   target_link_libraries(config_parser_test config_parser yaml-cpp)
+
+  # Safetensors loader test.
+  ament_add_gtest(safetensors_loader_test inference_controller/safetensors_loader_test.cpp)
+  target_link_libraries(safetensors_loader_test safetensors_loader ${TORCH_LIBRARIES})
+  set_target_properties(safetensors_loader_test PROPERTIES
+    INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  )
 
   # Inference controller test.
   ament_add_gtest(inference_controller_test inference_controller/inference_controller_test.cpp)

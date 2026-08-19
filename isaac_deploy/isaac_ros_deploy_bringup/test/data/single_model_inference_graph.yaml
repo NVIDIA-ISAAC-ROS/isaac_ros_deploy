@@ -29,18 +29,6 @@ nn_joint_order: &nn_order [joint_1, joint_2, joint_3]
 
 models:
   test_pipeline:
-    formatting:
-      input_format:
-      - joint_pos
-      - joint_vel
-      - body_rot
-      - body_ang_vel
-      - last_joint_pos
-      output_format:
-        joint_pos_targets: joint_pos_targets
-        joint_vel_targets: joint_vel_targets
-        body_rot_target: body_rot_target
-        body_ang_vel_target: body_ang_vel_target
     inputs:
     - name: joint_pos
       kind: state/joint/position
@@ -95,8 +83,7 @@ models:
 
     parameters:
       model_path: passthrough_model.onnx
-      backend: triton
-      device: cuda
+      backend: onnx
 
 pipeline:
   inputs:
@@ -111,6 +98,6 @@ pipeline:
     - joint_vel_targets
     - body_rot_target
     - body_ang_vel_target
-  feedback_connections:
+  feedback_flow:
     test_pipeline/joint_pos_targets: [test_pipeline/last_joint_pos]
   data_flow: {}

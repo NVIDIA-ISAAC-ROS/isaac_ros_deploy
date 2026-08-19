@@ -53,7 +53,8 @@ TEST(CommandInterfaceConverterTest, JointPositionWithPrefixSuffix)
     "target/joint/position");
 
   const std::vector<std::vector<std::string>> element_names = {{}, {"hip", "knee"}};
-  const auto interfaces = converter->get_required_command_interfaces(element_names, "safety", "_raw");
+  const auto interfaces = converter->get_required_command_interfaces(element_names, "safety",
+      "_raw");
   ASSERT_EQ(interfaces.size(), 2u);
   EXPECT_EQ(interfaces[0], "safety/hip/position_raw");
   EXPECT_EQ(interfaces[1], "safety/knee/position_raw");

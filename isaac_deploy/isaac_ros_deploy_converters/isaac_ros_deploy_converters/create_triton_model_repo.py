@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -154,7 +155,7 @@ def _generate_model_config(
     inputs: list[dict],
     outputs: list[dict],
     dynamic_batch: bool,
-    device: str = "cuda",
+    use_cpu: bool = False,
 ) -> str:
     """
     Generate a Triton config.pbtxt for an ONNX model.
@@ -163,9 +164,6 @@ def _generate_model_config(
     tensor is replaced with -1 so the config matches the ONNX model's
     dynamic batch dimension.
 
-    When ``device`` is ``"cpu"``, the model is placed on CPU via
-    ``instance_group``.  This is useful for small models (e.g. AGILE) that
-    are fast enough on CPU and should not compete for GPU with heavier models.
     """
     def _format_dims(shape: list[int]) -> str:
         dims = list(shape)
@@ -185,7 +183,7 @@ def _generate_model_config(
         )
 
     instance_group = ""
-    if device.lower() == "cpu":
+    if use_cpu:
         instance_group = "instance_group [{ kind: KIND_CPU }]\n\n"
 
     return (
@@ -211,11 +209,27 @@ def _resolve_model_path(config_path: Path, model_cfg: dict) -> Path:
     return model_path
 
 
+def _validate_model_backend(model_name: str, model_cfg: dict) -> None:
+    """Validate that a LEAPP model artifact can be served by this Triton converter."""
+    backend = model_cfg.get("parameters", {}).get("backend")
+    if backend is None:
+        raise ValueError(
+            f"Model '{model_name}' parameters.backend is missing. "
+            "Export the LEAPP graph with the ONNX backend."
+        )
+    if backend != "onnx":
+        raise ValueError(
+            f"Model '{model_name}' backend '{backend}' is not supported by "
+            "create_triton_model_repo. Export the LEAPP graph with the ONNX backend."
+        )
+
+
 def _create_model_dir(
     config_path: Path,
     model_name: str,
     output_dir: Path,
     config: dict,
+    use_cpu: bool = False,
 ) -> bool:
     """
     Create a single Triton model directory inside a repo.
@@ -248,13 +262,12 @@ def _create_model_dir(
             dest.symlink_to(data_file.resolve())
 
     dynamic_batch = _has_dynamic_batch(onnx_model_path)
-    device = model_cfg.get("parameters", {}).get("device", "cuda")
     config_pbtxt = _generate_model_config(
         model_name,
         model_cfg.get("inputs", []),
         model_cfg.get("outputs", []),
         dynamic_batch,
-        device=device,
+        use_cpu=use_cpu,
     )
     (model_dir / "config.pbtxt").write_text(config_pbtxt)
 
@@ -289,6 +302,7 @@ class TritonRepoResult:
 def create_triton_model_repo(
     config_path: Path,
     output_dir: Path,
+    cpu_models: set[str] | None = None,
 ) -> TritonRepoResult:
     """
     Create a Triton ensemble model repository from a YAML config.
@@ -298,6 +312,8 @@ def create_triton_model_repo(
 
     ``config_path`` is the path to the YAML configuration file.
     ``output_dir`` is the directory to create the model repository in.
+    ``cpu_models`` is the set of LEAPP model names to pin to Triton CPU
+    instance groups.
 
     Returns a TritonRepoResult with model name, tensor names, and binding
     names.
@@ -309,43 +325,55 @@ def create_triton_model_repo(
         )
     models = config["models"]
     pipeline = config.get("pipeline", {})
+    cpu_models = cpu_models or set()
+    unknown_cpu_models = cpu_models - set(models)
+    if unknown_cpu_models:
+        unknown = ", ".join(sorted(unknown_cpu_models))
+        raise ValueError(f"CPU model(s) not found in LEAPP config: {unknown}")
 
     # Create per-model ONNX repos with config.pbtxt.
     dynamic_batch = False
-    for model_name in models:
-        if _create_model_dir(config_path, model_name, output_dir, config):
+    for model_name, model_cfg in models.items():
+        _validate_model_backend(model_name, model_cfg)
+        if _create_model_dir(
+            config_path,
+            model_name,
+            output_dir,
+            config,
+            use_cpu=model_name in cpu_models,
+        ):
             dynamic_batch = True
 
     # Parse pipeline connectivity.
-    dangling_inputs = pipeline.get("inputs", {})
-    dangling_outputs = pipeline.get("outputs", {})
-    feedback_connections = pipeline.get("feedback_connections", {})
+    graph_inputs = pipeline.get("inputs", {})
+    graph_outputs = pipeline.get("outputs", {})
+    feedback_flow = pipeline.get("feedback_flow", {})
     data_flow = pipeline.get("data_flow", {})
 
     # Build name sets.
-    dangling_input_names = {
-        name for names in dangling_inputs.values() for name in names
+    graph_input_names = {
+        name for names in graph_inputs.values() for name in names
     }
-    dangling_output_names = {
-        name for names in dangling_outputs.values() for name in names
+    graph_output_names = {
+        name for names in graph_outputs.values() for name in names
     }
     feedback_target_names = {
         t.split("/", 1)[1]
-        for targets in feedback_connections.values()
+        for targets in feedback_flow.values()
         for t in targets
     }
     feedback_source_names = {
-        key.split("/", 1)[1] for key in feedback_connections
+        key.split("/", 1)[1] for key in feedback_flow
     }
 
     # Determine ensemble tensor names for data-flow connections.
-    # If the source output is also externally visible (dangling or feedback),
-    # use its own name; otherwise prefix with _internal_.
+    # If the source output is also externally visible as a graph output or
+    # feedback source, use its own name; otherwise prefix with _internal_.
     data_flow_tensor_names: dict[str, str] = {}
     data_flow_target_to_tensor: dict[str, str] = {}
     for source_key, targets in data_flow.items():
         source_name = source_key.split("/", 1)[1]
-        if source_name in dangling_output_names or source_name in feedback_source_names:
+        if source_name in graph_output_names or source_name in feedback_source_names:
             tensor_name = source_name
         else:
             tensor_name = f"_internal_{source_name}"
@@ -362,14 +390,14 @@ def create_triton_model_repo(
     for model_name, model_cfg in models.items():
         for inp in model_cfg.get("inputs", []):
             name = inp["name"]
-            if name in dangling_input_names or name in feedback_target_names:
+            if name in graph_input_names or name in feedback_target_names:
                 if name not in ensemble_input_names:
                     ensemble_inputs.append(inp)
                     ensemble_input_names.append(name)
 
         for out in model_cfg.get("outputs", []):
             name = out["name"]
-            if name in dangling_output_names or name in feedback_source_names:
+            if name in graph_output_names or name in feedback_source_names:
                 if name not in ensemble_output_names:
                     ensemble_outputs.append(out)
                     ensemble_output_names.append(name)

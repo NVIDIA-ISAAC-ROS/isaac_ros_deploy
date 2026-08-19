@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,10 +27,12 @@
 struct TRITONSERVER_Server;
 struct TRITONSERVER_ResponseAllocator;
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
 /// Configuration for Triton Runner.
-struct TritonRunnerConfig {
+struct TritonRunnerConfig
+{
   /// Path to the .onnx model file.
   std::filesystem::path model_path;
   /// Path to Triton backend directory. Auto-detected from TRITON_BACKEND_DIRECTORY env var if
@@ -42,19 +45,19 @@ struct TritonRunnerConfig {
 /// Implements neural network inference using the Triton C API with an embedded in-process server.
 /// The ONNX model is loaded via Triton's onnxruntime backend with automatic model configuration.
 class TritonRunner : public InferenceRunner {
- public:
+public:
   ~TritonRunner() override;
 
   /// Create a TritonRunner from configuration.
   /// @param config Configuration for the runner.
   /// @return The runner or an error.
-  static expected<std::unique_ptr<TritonRunner>> create(const TritonRunnerConfig& config);
+  static expected<std::unique_ptr<TritonRunner>> create(const TritonRunnerConfig & config);
 
   /// Run inference with named inputs.
   /// @param inputs Map of input name to tensor.
   /// @param outputs Map of output name to tensor (written in-place).
   /// @return Success or error status.
-  expected<void> run(const TensorDict& inputs, TensorDict& outputs) override;
+  expected<void> run(const TensorDict & inputs, TensorDict & outputs) override;
 
   /// Get the names of expected inputs.
   std::vector<std::string> get_input_names() const override;
@@ -69,13 +72,13 @@ class TritonRunner : public InferenceRunner {
   expected<void> warmup() override;
 
   /// Get the expected input shapes.
-  const std::vector<std::vector<int64_t>>& get_input_shapes() const { return input_shapes_; }
+  const std::vector<std::vector<int64_t>> & get_input_shapes() const {return input_shapes_;}
 
   /// Get the expected output shapes.
-  const std::vector<std::vector<int64_t>>& get_output_shapes() const { return output_shapes_; }
+  const std::vector<std::vector<int64_t>> & get_output_shapes() const {return output_shapes_;}
 
- private:
-  explicit TritonRunner(const TritonRunnerConfig& config);
+private:
+  explicit TritonRunner(const TritonRunnerConfig & config);
 
   /// Initialize the runner: set up model repo, start server, query metadata.
   expected<void> init();
@@ -92,8 +95,8 @@ class TritonRunner : public InferenceRunner {
   TritonRunnerConfig config_;
   std::filesystem::path model_repo_dir_;
   std::string model_name_{"model"};
-  TRITONSERVER_Server* server_{nullptr};
-  TRITONSERVER_ResponseAllocator* allocator_{nullptr};
+  TRITONSERVER_Server * server_{nullptr};
+  TRITONSERVER_ResponseAllocator * allocator_{nullptr};
   std::vector<std::string> input_names_;
   std::vector<std::string> output_names_;
   std::vector<std::vector<int64_t>> input_shapes_;

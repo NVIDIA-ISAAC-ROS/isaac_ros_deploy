@@ -3,6 +3,18 @@ SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All 
 SPDX-License-Identifier: Apache-2.0
 -->
 <library path="isaac_ros_deploy_ros2_control_hardware">
+  <class name="isaac_ros_deploy_ros2_control/TopicBasedSystemInterface"
+         type="isaac_ros_deploy_ros2_control::hardware::TopicBasedSystemInterface"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Hardware system interface that communicates with Isaac Sim over ROS 2
+      topics. Subscribes to sensor_msgs/JointState for joint state feedback and
+      sensor_msgs/Imu for IMU data. Publishes sensor_msgs/JointState with
+      per-joint position and velocity targets to Isaac Sim, where the actuator
+      pipeline (Newton via the isaacsim.core.experimental.actuators extension)
+      runs PD / PID / clamping / delay inside the simulator at physics rate.
+    </description>
+  </class>
   <class name="isaac_ros_deploy_ros2_control/TopicSensorInterface"
          type="isaac_ros_deploy_ros2_control::hardware::TopicSensorInterface"
          base_class_type="hardware_interface::SensorInterface">

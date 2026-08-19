@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,40 +22,41 @@
 
 #include "tl_expected/expected.hpp"
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
 /// Error type for expected<T, E>.
-  struct Error
+struct Error
+{
+  enum class Code
   {
-    enum class Code
-    {
-      kInvalidArgument = 1,
-      kInternal = 2,
-      kNotFound = 3,
-      kFailedPrecondition = 4,
-    };
-
-    Code code;
-    std::string message;
+    kInvalidArgument = 1,
+    kInternal = 2,
+    kNotFound = 3,
+    kFailedPrecondition = 4,
   };
 
-  template < typename T >
-  using expected = tl::expected < T, Error >;
+  Code code;
+  std::string message;
+};
+
+template<typename T>
+using expected = tl::expected<T, Error>;
 
 /// Create an error.
-  inline Error make_error(Error::Code code, std::string_view message = "")
-  {
-    return Error {code, std::string(message)};
-  }
+inline Error make_error(Error::Code code, std::string_view message = "")
+{
+  return Error {code, std::string(message)};
+}
 
 /// Macro for early return on error.
 #define RETURN_IF_ERROR(expr) \
-        do { \
-          auto _status_or_value = (expr); \
-          if (!_status_or_value.has_value()) { \
-            return tl::unexpected(_status_or_value.error()); \
-          } \
-        } while (0)
+  do { \
+    auto _status_or_value = (expr); \
+    if (!_status_or_value.has_value()) { \
+      return tl::unexpected(_status_or_value.error()); \
+    } \
+  } while (0)
 
 /// Helper macros for unique variable names.
 #define _IDC_CONCAT_IMPL(a, b) a ## b
@@ -64,10 +66,10 @@ namespace isaac_deploy_core {
 /// Note: Cannot be wrapped in do/while because lhs must remain in scope.
 /// Must be used inside braces (not after an unbraced if/else).
 #define ASSIGN_OR_RETURN(lhs, expr) \
-        auto _IDC_CONCAT(_result_, __LINE__) = (expr); \
-        if (!_IDC_CONCAT(_result_, __LINE__).has_value()) { \
-          return tl::unexpected(_IDC_CONCAT(_result_, __LINE__).error()); \
-        } \
-        lhs = std::move(*_IDC_CONCAT(_result_, __LINE__))
+  auto _IDC_CONCAT(_result_, __LINE__) = (expr); \
+  if (!_IDC_CONCAT(_result_, __LINE__).has_value()) { \
+    return tl::unexpected(_IDC_CONCAT(_result_, __LINE__).error()); \
+  } \
+  lhs = std::move(*_IDC_CONCAT(_result_, __LINE__))
 
 }  // namespace isaac_deploy_core
