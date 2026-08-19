@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,18 +26,21 @@
 #include "isaac_deploy_core/inference_controller/output/output_builder.hpp"
 #include "isaac_deploy_core/inference_controller/runner/inference_runner.hpp"
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
 /// Configuration for the InferenceController.
-  struct InferenceControllerConfig
-  {
+struct InferenceControllerConfig
+{
     /// Configuration of the inputs of the controller.
-    InputBuilder::Config inputs;
+  InputBuilder::Config inputs;
     /// Configuration of the outputs of the controller.
-    OutputBuilder::Config outputs;
+  OutputBuilder::Config outputs;
     /// Configuration for the inference runner.
-    InferenceRunner::Config runner;
-  };
+  InferenceRunner::Config runner;
+    /// Optional feedback initial values keyed by feedback source/output name.
+  TensorDict feedback_initial_values;
+};
 
 /// InferenceController runs neural network inference with input/output processing.
 ///
@@ -46,14 +50,14 @@ namespace isaac_deploy_core {
 /// 3. OutputBuilder: Postprocesses outputs (reordering)
 ///
 /// The advance() method is real-time safe (does not allocate) after activate() is called.
-  class InferenceController {
+class InferenceController {
 public:
     /// Create the controller from configuration.
-    static expected < InferenceController > create(InferenceControllerConfig config);
+  static expected<InferenceController> create(InferenceControllerConfig config);
 
     /// Trigger JIT compilation by running one inference with zero-filled dummy inputs.
     /// Call once after create() and before activate(), outside the real-time loop.
-    expected<void> warmup();
+  expected<void> warmup();
 
     /// Activate the controller.
     /// Call this to prepare the controller just before it starts running.
@@ -63,67 +67,70 @@ public:
     /// @param input_specs TensorSpec per input (positionally aligned with inputs).
     /// @param output_specs Specs describing the expected structure of outputs.
     /// @param outputs Pre-allocated output tensors (controller writes into these).
-    expected < void > activate(
-      const std::vector < NamedTensor > &inputs,
-      const std::vector < TensorSpec > &input_specs,
-      const std::vector < TensorSpec > &output_specs,
-      std::vector < NamedTensor > &outputs);
+  expected<void> activate(
+    const std::vector<NamedTensor> & inputs,
+    const std::vector<TensorSpec> & input_specs,
+    const std::vector<TensorSpec> & output_specs,
+    std::vector<NamedTensor> & outputs);
 
     /// Deactivate the controller.
     /// Call this to clean up after the controller stops running.
-    expected < void > deactivate();
+  expected<void> deactivate();
 
     /// Advance the controller by one timestep.
     /// This method is real-time safe (does not allocate).
     /// Inputs must be in the same order as passed to activate().
     /// @param inputs Input tensors (positionally aligned with activate).
     /// @param outputs Output tensors (written in-place by the controller).
-    expected < void > advance(
-      const std::vector < NamedTensor > &inputs,
-      std::vector < NamedTensor > &outputs);
+  expected<void> advance(
+    const std::vector<NamedTensor> & inputs,
+    std::vector<NamedTensor> & outputs);
 
     /// Get the names of required inputs.
-    const std::vector < std::string > & input_names() const {
-      return input_names_;
-    }
+  const std::vector<std::string> & input_names() const
+  {
+    return input_names_;
+  }
 
     /// Get the names of produced outputs.
-    const std::vector < std::string > & output_names() const {
-      return output_names_;
-    }
+  const std::vector<std::string> & output_names() const
+  {
+    return output_names_;
+  }
 
 private:
-    InferenceController(
-      InputBuilder input_builder, std::unique_ptr < InferenceRunner > runner,
-      OutputBuilder output_builder);
+  InferenceController(
+    InputBuilder input_builder, std::unique_ptr<InferenceRunner> runner,
+    OutputBuilder output_builder, TensorDict feedback_initial_values);
 
-    InputBuilder input_builder_;
-    std::unique_ptr < InferenceRunner > runner_;
-    OutputBuilder output_builder_;
+  InputBuilder input_builder_;
+  std::unique_ptr<InferenceRunner> runner_;
+  OutputBuilder output_builder_;
+  TensorDict feedback_initial_values_;
 
-    std::vector < std::string > input_names_;
-    std::vector < std::string > output_names_;
+  std::vector<std::string> input_names_;
+  std::vector<std::string> output_names_;
 
     // Pre-allocated buffers for neural network I/O.
-    TensorDict nn_inputs_;
-    TensorDict nn_outputs_;
+  TensorDict nn_inputs_;
+  TensorDict nn_outputs_;
 
     // All inputs to InputBuilder (external + feedback), positionally aligned.
-    std::vector < NamedTensor > all_inputs_;
+  std::vector<NamedTensor> all_inputs_;
     // Maps external input index to position in all_inputs_.
-    struct ExternalPosition
-    {
-      size_t ext_idx;
-      size_t all_idx;
-    };
-    std::vector < ExternalPosition > external_positions_;
-    // Maps feedback positions in all_inputs_ to NN output keys.
-    struct FeedbackMapping
-    {
-      size_t input_idx;
-      std::string output_key;
-    };
-    std::vector < FeedbackMapping > feedback_mappings_;
+  struct ExternalPosition
+  {
+    size_t ext_idx;
+    size_t all_idx;
   };
+  std::vector<ExternalPosition> external_positions_;
+    // Maps feedback positions in all_inputs_ to NN output keys.
+  struct FeedbackMapping
+  {
+    size_t input_idx;
+    std::string output_key;
+  };
+  std::vector<FeedbackMapping> feedback_mappings_;
+};
 
 }  // namespace isaac_deploy_core

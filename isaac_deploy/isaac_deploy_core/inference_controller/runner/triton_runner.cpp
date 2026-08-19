@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -24,12 +25,15 @@
 #include <future>
 #include <sstream>
 #include <thread>
+#include <utility>
 
 #include "triton/core/tritonserver.h"
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
-namespace {
+namespace
+{
 
 /// Maximum number of poll attempts when waiting for server/model readiness.
 constexpr int kMaxReadinessPollAttempts{2000};
@@ -38,22 +42,23 @@ constexpr int kMaxReadinessPollAttempts{2000};
 constexpr auto kReadinessPollInterval{std::chrono::milliseconds(5)};
 
 /// Check a Triton C API call and return our Error type on failure.
-#define RETURN_TRITON_ERROR(expr)                                         \
-  do {                                                                    \
-    TRITONSERVER_Error* _triton_err = (expr);                             \
-    if (_triton_err != nullptr) {                                         \
-      const std::string _msg = TRITONSERVER_ErrorMessage(_triton_err);    \
-      TRITONSERVER_ErrorDelete(_triton_err);                              \
-      return tl::unexpected(make_error(Error::Code::kInternal, _msg));    \
-    }                                                                     \
+#define RETURN_TRITON_ERROR(expr) \
+  do { \
+    TRITONSERVER_Error * _triton_err = (expr); \
+    if (_triton_err != nullptr) { \
+      const std::string _msg = TRITONSERVER_ErrorMessage(_triton_err); \
+      TRITONSERVER_ErrorDelete(_triton_err); \
+      return tl::unexpected(make_error(Error::Code::kInternal, _msg)); \
+    } \
   } while (0)
 
 /// CPU-only response allocator: allocates output buffers with malloc.
-TRITONSERVER_Error* ResponseAlloc(
-    TRITONSERVER_ResponseAllocator* allocator, const char* tensor_name, size_t byte_size,
-    TRITONSERVER_MemoryType preferred_memory_type, int64_t preferred_memory_type_id, void* userp,
-    void** buffer, void** buffer_userp, TRITONSERVER_MemoryType* actual_memory_type,
-    int64_t* actual_memory_type_id) {
+TRITONSERVER_Error * ResponseAlloc(
+  TRITONSERVER_ResponseAllocator * allocator, const char * tensor_name, size_t byte_size,
+  TRITONSERVER_MemoryType preferred_memory_type, int64_t preferred_memory_type_id, void * userp,
+  void ** buffer, void ** buffer_userp, TRITONSERVER_MemoryType * actual_memory_type,
+  int64_t * actual_memory_type_id)
+{
   (void)allocator;
   (void)tensor_name;
   (void)preferred_memory_type;
@@ -79,9 +84,10 @@ TRITONSERVER_Error* ResponseAlloc(
 }
 
 /// CPU-only response release: frees buffers allocated by ResponseAlloc.
-TRITONSERVER_Error* ResponseRelease(
-    TRITONSERVER_ResponseAllocator* allocator, void* buffer, void* buffer_userp, size_t byte_size,
-    TRITONSERVER_MemoryType memory_type, int64_t memory_type_id) {
+TRITONSERVER_Error * ResponseRelease(
+  TRITONSERVER_ResponseAllocator * allocator, void * buffer, void * buffer_userp, size_t byte_size,
+  TRITONSERVER_MemoryType memory_type, int64_t memory_type_id)
+{
   (void)allocator;
   (void)buffer_userp;
   (void)byte_size;
@@ -94,10 +100,11 @@ TRITONSERVER_Error* ResponseRelease(
 
 /// Callback invoked when inference completes. Sets the promise with the response.
 void InferenceComplete(
-    TRITONSERVER_InferenceResponse* response, const uint32_t flags, void* userp) {
+  TRITONSERVER_InferenceResponse * response, const uint32_t flags, void * userp)
+{
   if ((flags & TRITONSERVER_RESPONSE_COMPLETE_FINAL) != 0) {
-    auto* promise =
-        reinterpret_cast<std::promise<TRITONSERVER_InferenceResponse*>*>(userp);
+    auto * promise =
+      reinterpret_cast<std::promise<TRITONSERVER_InferenceResponse *> *>(userp);
     if (promise != nullptr) {
       promise->set_value(response);
     }
@@ -106,10 +113,11 @@ void InferenceComplete(
 
 /// Callback invoked when an inference request is released. Sets a barrier promise.
 void InferRequestRelease(
-    TRITONSERVER_InferenceRequest* request, const uint32_t flags, void* userp) {
+  TRITONSERVER_InferenceRequest * request, const uint32_t flags, void * userp)
+{
   (void)request;
   (void)flags;
-  auto* barrier = reinterpret_cast<std::promise<void>*>(userp);
+  auto * barrier = reinterpret_cast<std::promise<void> *>(userp);
   if (barrier != nullptr) {
     barrier->set_value();
   }
@@ -120,12 +128,14 @@ void InferRequestRelease(
 ///   [{"name":"obs","datatype":"FP32","shape":[-1,42]}, ...]
 ///
 /// This is a minimal parser that avoids adding a JSON library dependency.
-struct TensorMetadata {
+struct TensorMetadata
+{
   std::string name;
   std::vector<int64_t> shape;
 };
 
-std::vector<TensorMetadata> parse_tensor_array(const std::string& json, const std::string& key) {
+std::vector<TensorMetadata> parse_tensor_array(const std::string & json, const std::string & key)
+{
   std::vector<TensorMetadata> result;
 
   // Find the key, e.g. "inputs":[ or "outputs":[
@@ -192,7 +202,7 @@ std::vector<TensorMetadata> parse_tensor_array(const std::string& json, const st
         const auto bracket_end = obj.find(']', bracket_start);
         if (bracket_end != std::string::npos) {
           const std::string shape_str =
-              obj.substr(bracket_start + 1, bracket_end - bracket_start - 1);
+            obj.substr(bracket_start + 1, bracket_end - bracket_start - 1);
           std::istringstream ss(shape_str);
           std::string token;
           while (std::getline(ss, token, ',')) {
@@ -219,16 +229,18 @@ std::vector<TensorMetadata> parse_tensor_array(const std::string& json, const st
 
 }  // namespace
 
-TritonRunner::TritonRunner(const TritonRunnerConfig& config) : config_(config) {}
+TritonRunner::TritonRunner(const TritonRunnerConfig & config)
+: config_(config) {}
 
-TritonRunner::~TritonRunner() {
+TritonRunner::~TritonRunner()
+{
   if (server_ != nullptr) {
     TRITONSERVER_ServerStop(server_);
 
     // Poll until the server is no longer live.
     bool server_live{true};
     for (int i = 0; i < kMaxReadinessPollAttempts && server_live; ++i) {
-      TRITONSERVER_Error* err = TRITONSERVER_ServerIsLive(server_, &server_live);
+      TRITONSERVER_Error * err = TRITONSERVER_ServerIsLive(server_, &server_live);
       if (err != nullptr) {
         TRITONSERVER_ErrorDelete(err);
         break;
@@ -254,7 +266,8 @@ TritonRunner::~TritonRunner() {
   }
 }
 
-expected<std::unique_ptr<TritonRunner>> TritonRunner::create(const TritonRunnerConfig& config) {
+expected<std::unique_ptr<TritonRunner>> TritonRunner::create(const TritonRunnerConfig & config)
+{
   if (!std::filesystem::exists(config.model_path)) {
     return tl::unexpected(
         make_error(Error::Code::kNotFound,
@@ -265,14 +278,15 @@ expected<std::unique_ptr<TritonRunner>> TritonRunner::create(const TritonRunnerC
     auto runner = std::unique_ptr<TritonRunner>(new TritonRunner(config));
     RETURN_IF_ERROR(runner->init());
     return runner;
-  } catch (const std::exception& e) {
+  } catch (const std::exception & e) {
     return tl::unexpected(
         make_error(Error::Code::kInternal,
                    std::string("Failed to create Triton runner: ") + e.what()));
   }
 }
 
-expected<void> TritonRunner::init() {
+expected<void> TritonRunner::init()
+{
   RETURN_IF_ERROR(setup_model_repo());
   RETURN_IF_ERROR(start_server());
 
@@ -284,11 +298,12 @@ expected<void> TritonRunner::init() {
   return {};
 }
 
-expected<void> TritonRunner::setup_model_repo() {
+expected<void> TritonRunner::setup_model_repo()
+{
   // Create /tmp/triton_model_repo_<pid>_<counter>/model/1/
   static std::atomic<int> counter{0};
   const std::string repo_name =
-      "triton_model_repo_" + std::to_string(getpid()) + "_" + std::to_string(counter++);
+    "triton_model_repo_" + std::to_string(getpid()) + "_" + std::to_string(counter++);
   model_repo_dir_ = std::filesystem::temp_directory_path() / repo_name;
 
   const auto model_version_dir = model_repo_dir_ / model_name_ / "1";
@@ -313,13 +328,16 @@ expected<void> TritonRunner::setup_model_repo() {
   return {};
 }
 
-expected<void> TritonRunner::start_server() {
-  TRITONSERVER_ServerOptions* options{nullptr};
+expected<void> TritonRunner::start_server()
+{
+  TRITONSERVER_ServerOptions * options{nullptr};
   RETURN_TRITON_ERROR(TRITONSERVER_ServerOptionsNew(&options));
 
   // RAII guard ensures options are freed on all paths.
-  struct OptionsDeleter {
-    void operator()(TRITONSERVER_ServerOptions* opts) const {
+  struct OptionsDeleter
+  {
+    void operator()(TRITONSERVER_ServerOptions * opts) const
+    {
       if (opts != nullptr) {
         TRITONSERVER_ServerOptionsDelete(opts);
       }
@@ -337,12 +355,12 @@ expected<void> TritonRunner::start_server() {
 
   // Set backend directory: prefer explicit config, then env var.
   const auto resolve_backend_dir = [this]() -> std::filesystem::path {
-    if (!config_.backend_dir.empty()) {
-      return config_.backend_dir;
-    }
-    const char* env_val = std::getenv("TRITON_BACKEND_DIRECTORY");
-    return (env_val != nullptr) ? std::filesystem::path(env_val) : std::filesystem::path{};
-  };
+      if (!config_.backend_dir.empty()) {
+        return config_.backend_dir;
+      }
+      const char * env_val = std::getenv("TRITON_BACKEND_DIRECTORY");
+      return (env_val != nullptr) ? std::filesystem::path(env_val) : std::filesystem::path{};
+    };
   const auto backend_dir = resolve_backend_dir();
   if (!backend_dir.empty() && std::filesystem::is_directory(backend_dir)) {
     RETURN_TRITON_ERROR(
@@ -356,7 +374,7 @@ expected<void> TritonRunner::start_server() {
       TRITONSERVER_ServerOptionsSetServerId(options, "isaac_deploy_triton"));
 
   // Create the server. The guard ensures options are freed whether this succeeds or fails.
-  TRITONSERVER_Error* err = TRITONSERVER_ServerNew(&server_, options);
+  TRITONSERVER_Error * err = TRITONSERVER_ServerNew(&server_, options);
   options_guard.reset();  // Free options now (no longer needed after ServerNew).
   if (err != nullptr) {
     const std::string msg = TRITONSERVER_ErrorMessage(err);
@@ -368,7 +386,7 @@ expected<void> TritonRunner::start_server() {
   // Wait for the server and model to become ready.
   bool server_ready{false};
   for (int i = 0; i < kMaxReadinessPollAttempts; ++i) {
-    TRITONSERVER_Error* poll_err = TRITONSERVER_ServerIsReady(server_, &server_ready);
+    TRITONSERVER_Error * poll_err = TRITONSERVER_ServerIsReady(server_, &server_ready);
     if (poll_err != nullptr) {
       TRITONSERVER_ErrorDelete(poll_err);
     }
@@ -384,8 +402,8 @@ expected<void> TritonRunner::start_server() {
 
   bool model_ready{false};
   for (int i = 0; i < kMaxReadinessPollAttempts; ++i) {
-    TRITONSERVER_Error* poll_err =
-        TRITONSERVER_ServerModelIsReady(server_, model_name_.c_str(), -1, &model_ready);
+    TRITONSERVER_Error * poll_err =
+      TRITONSERVER_ServerModelIsReady(server_, model_name_.c_str(), -1, &model_ready);
     if (poll_err != nullptr) {
       TRITONSERVER_ErrorDelete(poll_err);
     }
@@ -403,15 +421,16 @@ expected<void> TritonRunner::start_server() {
   return {};
 }
 
-expected<void> TritonRunner::query_model_metadata() {
-  TRITONSERVER_Message* metadata_msg{nullptr};
+expected<void> TritonRunner::query_model_metadata()
+{
+  TRITONSERVER_Message * metadata_msg{nullptr};
   RETURN_TRITON_ERROR(
       TRITONSERVER_ServerModelMetadata(server_, model_name_.c_str(), -1, &metadata_msg));
 
-  const char* json_buf{nullptr};
+  const char * json_buf{nullptr};
   size_t json_size{0};
-  TRITONSERVER_Error* err =
-      TRITONSERVER_MessageSerializeToJson(metadata_msg, &json_buf, &json_size);
+  TRITONSERVER_Error * err =
+    TRITONSERVER_MessageSerializeToJson(metadata_msg, &json_buf, &json_size);
   if (err != nullptr) {
     const std::string msg = TRITONSERVER_ErrorMessage(err);
     TRITONSERVER_ErrorDelete(err);
@@ -424,11 +443,11 @@ expected<void> TritonRunner::query_model_metadata() {
 
   // Parse inputs.
   const auto inputs = parse_tensor_array(json, "inputs");
-  for (const auto& input : inputs) {
+  for (const auto & input : inputs) {
     input_names_.push_back(input.name);
     auto shape = input.shape;
     // Replace -1 (dynamic dims) with 1.
-    for (auto& dim : shape) {
+    for (auto & dim : shape) {
       if (dim == -1) {
         dim = 1;
       }
@@ -438,10 +457,10 @@ expected<void> TritonRunner::query_model_metadata() {
 
   // Parse outputs.
   const auto outputs = parse_tensor_array(json, "outputs");
-  for (const auto& output : outputs) {
+  for (const auto & output : outputs) {
     output_names_.push_back(output.name);
     auto shape = output.shape;
-    for (auto& dim : shape) {
+    for (auto & dim : shape) {
       if (dim == -1) {
         dim = 1;
       }
@@ -461,15 +480,18 @@ expected<void> TritonRunner::query_model_metadata() {
   return {};
 }
 
-expected<void> TritonRunner::run(const TensorDict& inputs, TensorDict& outputs) {
+expected<void> TritonRunner::run(const TensorDict & inputs, TensorDict & outputs)
+{
   // Create inference request.
-  TRITONSERVER_InferenceRequest* request{nullptr};
+  TRITONSERVER_InferenceRequest * request{nullptr};
   RETURN_TRITON_ERROR(
       TRITONSERVER_InferenceRequestNew(&request, server_, model_name_.c_str(), -1));
 
   // Ensure request is cleaned up on all paths.
-  struct RequestDeleter {
-    void operator()(TRITONSERVER_InferenceRequest* req) const {
+  struct RequestDeleter
+  {
+    void operator()(TRITONSERVER_InferenceRequest * req) const
+    {
       if (req != nullptr) {
         TRITONSERVER_InferenceRequestDelete(req);
       }
@@ -483,7 +505,7 @@ expected<void> TritonRunner::run(const TensorDict& inputs, TensorDict& outputs) 
 
   // Add inputs.
   for (size_t i = 0; i < input_names_.size(); ++i) {
-    const auto& input_name = input_names_[i];
+    const auto & input_name = input_names_[i];
     const auto it = inputs.find(input_name);
     if (it == inputs.end()) {
       return tl::unexpected(
@@ -491,7 +513,7 @@ expected<void> TritonRunner::run(const TensorDict& inputs, TensorDict& outputs) 
     }
 
     torch::Tensor tensor = it->second.to(torch::kFloat32).contiguous();
-    const auto& expected_shape = input_shapes_[i];
+    const auto & expected_shape = input_shapes_[i];
 
     // Verify element count matches.
     int64_t expected_numel{1};
@@ -519,34 +541,34 @@ expected<void> TritonRunner::run(const TensorDict& inputs, TensorDict& outputs) 
   }
 
   // Request outputs.
-  for (const auto& output_name : output_names_) {
+  for (const auto & output_name : output_names_) {
     RETURN_TRITON_ERROR(
         TRITONSERVER_InferenceRequestAddRequestedOutput(request, output_name.c_str()));
   }
 
   // Set up synchronous completion via promise/future.
-  std::promise<TRITONSERVER_InferenceResponse*> response_promise;
-  std::future<TRITONSERVER_InferenceResponse*> response_future = response_promise.get_future();
+  std::promise<TRITONSERVER_InferenceResponse *> response_promise;
+  std::future<TRITONSERVER_InferenceResponse *> response_future = response_promise.get_future();
 
   std::promise<void> release_barrier;
   std::future<void> release_future = release_barrier.get_future();
 
   RETURN_TRITON_ERROR(TRITONSERVER_InferenceRequestSetReleaseCallback(
-      request, InferRequestRelease, reinterpret_cast<void*>(&release_barrier)));
+      request, InferRequestRelease, reinterpret_cast<void *>(&release_barrier)));
 
   RETURN_TRITON_ERROR(TRITONSERVER_InferenceRequestSetResponseCallback(
       request, allocator_, nullptr, InferenceComplete,
-      reinterpret_cast<void*>(&response_promise)));
+      reinterpret_cast<void *>(&response_promise)));
 
   // Release ownership: Triton takes over the request lifecycle.
   RETURN_TRITON_ERROR(TRITONSERVER_ServerInferAsync(server_, request_guard.release(), nullptr));
 
   // Block until the response arrives.
-  TRITONSERVER_InferenceResponse* response = response_future.get();
+  TRITONSERVER_InferenceResponse * response = response_future.get();
 
   // Check for inference errors. The error is owned by the response, so do not delete it
   // separately — TRITONSERVER_InferenceResponseDelete handles cleanup.
-  TRITONSERVER_Error* resp_err = TRITONSERVER_InferenceResponseError(response);
+  TRITONSERVER_Error * resp_err = TRITONSERVER_InferenceResponseError(response);
   if (resp_err != nullptr) {
     const std::string msg = TRITONSERVER_ErrorMessage(resp_err);
     TRITONSERVER_InferenceResponseDelete(response);
@@ -555,8 +577,8 @@ expected<void> TritonRunner::run(const TensorDict& inputs, TensorDict& outputs) 
 
   // Read output tensors from the response.
   uint32_t output_count{0};
-  TRITONSERVER_Error* count_err =
-      TRITONSERVER_InferenceResponseOutputCount(response, &output_count);
+  TRITONSERVER_Error * count_err =
+    TRITONSERVER_InferenceResponseOutputCount(response, &output_count);
   if (count_err != nullptr) {
     const std::string msg = TRITONSERVER_ErrorMessage(count_err);
     TRITONSERVER_ErrorDelete(count_err);
@@ -565,17 +587,17 @@ expected<void> TritonRunner::run(const TensorDict& inputs, TensorDict& outputs) 
   }
 
   for (uint32_t i = 0; i < output_count; ++i) {
-    const char* name{nullptr};
+    const char * name{nullptr};
     TRITONSERVER_DataType dtype{};
-    const int64_t* shape{nullptr};
+    const int64_t * shape{nullptr};
     uint64_t dims_count{0};
-    const void* buffer{nullptr};
+    const void * buffer{nullptr};
     size_t byte_size{0};
     TRITONSERVER_MemoryType memory_type{};
     int64_t memory_type_id{0};
-    void* userp{nullptr};
+    void * userp{nullptr};
 
-    TRITONSERVER_Error* out_err = TRITONSERVER_InferenceResponseOutput(
+    TRITONSERVER_Error * out_err = TRITONSERVER_InferenceResponseOutput(
         response, i, &name, &dtype, &shape, &dims_count, &buffer, &byte_size, &memory_type,
         &memory_type_id, &userp);
     if (out_err != nullptr) {
@@ -588,10 +610,11 @@ expected<void> TritonRunner::run(const TensorDict& inputs, TensorDict& outputs) 
     // Build shape vector and create a torch tensor by copying the data.
     const std::vector<int64_t> tensor_shape(shape, shape + dims_count);
     const torch::Tensor torch_output =
-        torch::from_blob(
-            const_cast<void*>(buffer), torch::IntArrayRef(tensor_shape.data(), tensor_shape.size()),
+      torch::from_blob(
+            const_cast<void *>(buffer),
+        torch::IntArrayRef(tensor_shape.data(), tensor_shape.size()),
             torch::kFloat32)
-            .clone();
+      .clone();
 
     outputs[std::string(name)] = torch_output;
   }
@@ -603,15 +626,17 @@ expected<void> TritonRunner::run(const TensorDict& inputs, TensorDict& outputs) 
   return {};
 }
 
-std::vector<std::string> TritonRunner::get_input_names() const { return input_names_; }
+std::vector<std::string> TritonRunner::get_input_names() const {return input_names_;}
 
-std::vector<std::string> TritonRunner::get_output_names() const { return output_names_; }
+std::vector<std::string> TritonRunner::get_output_names() const {return output_names_;}
 
-void TritonRunner::reset() {
+void TritonRunner::reset()
+{
   // Triton models are stateless, nothing to reset.
 }
 
-expected<void> TritonRunner::warmup() {
+expected<void> TritonRunner::warmup()
+{
   TensorDict dummy_inputs;
   for (size_t i = 0; i < input_names_.size(); ++i) {
     dummy_inputs[input_names_[i]] = torch::zeros(

@@ -17,12 +17,13 @@
 
 #include <gtest/gtest.h>
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
-  TEST(OutputBuilderTest, CreateSuccess) {
+TEST(OutputBuilderTest, CreateSuccess) {
     OutputBuilder::Config config {
-      .terms = {{.name = "pos_targets", .kind = "pos", .shape = {1, 3}},
-        {.name = "vel_targets", .kind = "vel", .shape = {1, 3}}}
+    .terms = {{.name = "pos_targets", .kind = "pos", .shape = {1, 3}},
+      {.name = "vel_targets", .kind = "vel", .shape = {1, 3}}}
     };
     auto result = OutputBuilder::create(config);
     ASSERT_TRUE(result.has_value());
@@ -31,17 +32,17 @@ namespace isaac_deploy_core {
     EXPECT_EQ(keys.size(), 2);
     EXPECT_EQ(keys[0], "pos_targets");
     EXPECT_EQ(keys[1], "vel_targets");
-  }
+}
 
-  TEST(OutputBuilderTest, ActivateAndAdvance) {
+TEST(OutputBuilderTest, ActivateAndAdvance) {
     OutputBuilder::Config config {
-      .terms = {{.name = "pos_targets", .kind = "pos", .shape = {1, 3}}}};
+    .terms = {{.name = "pos_targets", .kind = "pos", .shape = {1, 3}}}};
     auto builder_result = OutputBuilder::create(config);
     ASSERT_TRUE(builder_result.has_value());
     auto & builder = *builder_result;
 
-    std::vector < TensorSpec > specs = {{.names = {}}};
-    std::vector < NamedTensor > outputs = {{.name = "pos_targets", .tensor = torch::zeros({1, 3})}};
+    std::vector<TensorSpec> specs = {{.names = {}}};
+    std::vector<NamedTensor> outputs = {{.name = "pos_targets", .tensor = torch::zeros({1, 3})}};
 
     auto activate_result = builder.activate(specs, outputs);
     ASSERT_TRUE(activate_result.has_value());
@@ -53,18 +54,18 @@ namespace isaac_deploy_core {
     ASSERT_TRUE(advance_result.has_value());
 
     EXPECT_TRUE(torch::allclose(outputs[0].tensor, nn_outputs["pos_targets"]));
-  }
+}
 
-  TEST(OutputBuilderTest, MultipleOutputs) {
+TEST(OutputBuilderTest, MultipleOutputs) {
     OutputBuilder::Config config {.terms = {{.name = "pos", .kind = "pos", .shape = {1, 2}},
-        {.name = "vel", .kind = "vel", .shape = {1, 2}}}};
+      {.name = "vel", .kind = "vel", .shape = {1, 2}}}};
     auto builder_result = OutputBuilder::create(config);
     ASSERT_TRUE(builder_result.has_value());
     auto & builder = *builder_result;
 
-    std::vector < TensorSpec > specs = {{}, {}};
-    std::vector < NamedTensor > outputs = {{.name = "pos", .tensor = torch::zeros({1, 2})},
-      {.name = "vel", .tensor = torch::zeros({1, 2})}};
+    std::vector<TensorSpec> specs = {{}, {}};
+    std::vector<NamedTensor> outputs = {{.name = "pos", .tensor = torch::zeros({1, 2})},
+    {.name = "vel", .tensor = torch::zeros({1, 2})}};
 
     auto activate_result = builder.activate(specs, outputs);
     ASSERT_TRUE(activate_result.has_value());
@@ -78,24 +79,24 @@ namespace isaac_deploy_core {
 
     EXPECT_TRUE(torch::allclose(outputs[0].tensor, torch::tensor({{1.0f, 2.0f}})));
     EXPECT_TRUE(torch::allclose(outputs[1].tensor, torch::tensor({{3.0f, 4.0f}})));
-  }
+}
 
-  TEST(OutputBuilderTest, SceneDtSecondsDefaultsTo50Hz) {
+TEST(OutputBuilderTest, SceneDtSecondsDefaultsTo30Hz) {
     OutputBuilder::Config config {
-      .terms = {{.name = "pos_targets", .kind = "pos", .shape = {1, 3}}}};
+    .terms = {{.name = "pos_targets", .kind = "pos", .shape = {1, 3}}}};
     auto result = OutputBuilder::create(config);
     ASSERT_TRUE(result.has_value());
-    EXPECT_DOUBLE_EQ(result->get_policy_dt_seconds(), 0.02);
-  }
+    EXPECT_DOUBLE_EQ(result->get_policy_dt_seconds(), 1.0 / 30.0);
+}
 
-  TEST(OutputBuilderTest, SceneDtSecondsRespectsConfig) {
+TEST(OutputBuilderTest, SceneDtSecondsRespectsConfig) {
     OutputBuilder::Config config {
-      .terms = {{.name = "pos_targets", .kind = "pos", .shape = {1, 3}}},
-      .policy_dt_seconds = 0.04
+    .terms = {{.name = "pos_targets", .kind = "pos", .shape = {1, 3}}},
+    .policy_dt_seconds = 0.04
                                };
     auto result = OutputBuilder::create(config);
     ASSERT_TRUE(result.has_value());
     EXPECT_DOUBLE_EQ(result->get_policy_dt_seconds(), 0.04);
-  }
+}
 
 }  // namespace isaac_deploy_core

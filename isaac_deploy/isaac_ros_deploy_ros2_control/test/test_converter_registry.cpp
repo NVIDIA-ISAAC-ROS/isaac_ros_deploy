@@ -39,9 +39,9 @@ TEST(ConverterRegistryTest, RegisterAndCreate)
 {
   auto & reg = DummyRegistry::instance();
   reg.register_converter("test_kind", []() {
-    auto c = std::make_shared<DummyConverter>();
-    c->label = "hello";
-    return c;
+      auto c = std::make_shared<DummyConverter>();
+      c->label = "hello";
+      return c;
   });
 
   EXPECT_TRUE(reg.contains("test_kind"));

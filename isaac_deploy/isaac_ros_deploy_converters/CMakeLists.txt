@@ -83,6 +83,7 @@ target_include_directories(tensor_list_utils PUBLIC
 ament_target_dependencies(tensor_list_utils
   rclcpp
   isaac_ros_tensor_list_interfaces
+  std_msgs
 )
 target_link_libraries(tensor_list_utils
   isaac_deploy_core::types
@@ -149,6 +150,7 @@ target_link_libraries(isaac_ros_deploy_converters_lib
   isaac_deploy_core::config_parser
   isaac_deploy_core::input_builder
   isaac_deploy_core::output_builder
+  isaac_deploy_core::safetensors_loader
   ${TORCH_LIBRARIES}
   yaml-cpp
 )
@@ -251,6 +253,7 @@ ament_export_dependencies(
   isaac_ros_deploy_interfaces
   isaac_ros_tensor_list_interfaces
   sensor_msgs
+  std_msgs
   geometry_msgs
   nav_msgs
 )

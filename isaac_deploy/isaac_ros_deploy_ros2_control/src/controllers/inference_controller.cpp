@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,8 +21,10 @@
 #include <filesystem>
 
 #include "isaac_deploy_core/inference_controller/config_parser.hpp"
+#include "isaac_deploy_core/inference_controller/safetensors_loader.hpp"
 #include "isaac_ros_deploy_ros2_control/adapters/command_interface_adapter.hpp"
 #include "isaac_ros_deploy_ros2_control/adapters/state_interface_adapter.hpp"
+#include "isaac_ros_deploy_ros2_control/controllers/leapp_backend_mapping.hpp"
 #include "isaac_ros_deploy_ros2_control/converters/command_interface_converter.hpp"
 #include "isaac_ros_deploy_ros2_control/converters/state_interface_converter.hpp"
 #include "pluginlib/class_list_macros.hpp"
@@ -30,7 +33,6 @@ namespace isaac_ros_deploy_ros2_control
 {
 namespace controllers
 {
-
 
 InferenceController::InferenceController() = default;
 
@@ -193,13 +195,18 @@ bool InferenceController::load_config()
     // Parse runner config (from config sections, with parameter overrides).
     isaac_deploy_core::InferenceRunner::Config runner_config;
     runner_config.model_path = sections.model_path;
-    runner_config.runner_type = sections.backend;
+    const auto runner_type = leapp_backend_to_runner_type(sections.backend);
+    if (!runner_type.has_value()) {
+      RCLCPP_ERROR(
+        get_node()->get_logger(),
+        "%s",
+        runner_type.error().message.c_str());
+      return false;
+    }
+    runner_config.runner_type = *runner_type;
     // Command-line parameter overrides YAML.
     if (!model_path_.empty()) {
       runner_config.model_path = model_path_;
-    }
-    if (runner_config.runner_type.empty()) {
-      runner_config.runner_type = "triton";
     }
 
     if (runner_config.model_path.empty()) {
@@ -226,6 +233,17 @@ bool InferenceController::load_config()
     config.inputs = std::move(inputs_result.value());
     config.outputs = std::move(outputs_result.value());
     config.runner = runner_config;
+
+    auto feedback_initial_values_result = isaac_deploy_core::load_feedback_initial_values(
+      *graph_result, config_path_);
+    if (!feedback_initial_values_result.has_value()) {
+      RCLCPP_ERROR(
+        get_node()->get_logger(),
+        "Failed to load feedback initial values: %s",
+        feedback_initial_values_result.error().message.c_str());
+      return false;
+    }
+    config.feedback_initial_values = std::move(*feedback_initial_values_result);
 
     auto controller_result = isaac_deploy_core::InferenceController::create(std::move(config));
     if (!controller_result.has_value()) {

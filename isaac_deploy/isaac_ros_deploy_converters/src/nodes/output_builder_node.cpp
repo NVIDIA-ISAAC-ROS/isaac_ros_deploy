@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -126,7 +127,7 @@ void OutputBuilderNode::configure()
   }
 
   // Read semantic.scene.dt from the raw YAML so the builder can stamp step_dt
-  // on JointCommandTrajectory messages. Defaults to 0.02 s (50 Hz) if unset.
+  // on JointCommandTrajectory messages. Defaults to 1/30 s (30 Hz) if unset.
   if (config["semantic"] && config["semantic"]["scene"] &&
     config["semantic"]["scene"]["dt"].IsDefined())
   {

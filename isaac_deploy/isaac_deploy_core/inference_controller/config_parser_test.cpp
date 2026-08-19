@@ -17,21 +17,40 @@
 
 #include <gtest/gtest.h>
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
   // Helper: parse_graph_config + merge_graph_to_model_config in one step.
-  expected < ModelConfig > parse_and_merge(const YAML::Node & yaml)
-  {
-    auto graph_result = parse_graph_config(yaml);
-    if (!graph_result) {
-      return tl::unexpected(graph_result.error());
-    }
-    return merge_graph_to_model_config(*graph_result, yaml);
+expected<ModelConfig> parse_and_merge(const YAML::Node & yaml)
+{
+  auto graph_result = parse_graph_config(yaml);
+  if (!graph_result) {
+    return tl::unexpected(graph_result.error());
   }
+  return merge_graph_to_model_config(*graph_result, yaml);
+}
 
-  TEST(ConfigParserTest, ParseMinimalConfig) {
+void expect_error_contains(
+  const expected<ModelConfig> & result,
+  const std::string & expected_message)
+{
+  ASSERT_FALSE(result.has_value());
+  EXPECT_NE(result.error().message.find(expected_message), std::string::npos)
+    << result.error().message;
+}
+
+void expect_graph_error_contains(
+  const expected<GraphConfig> & result,
+  const std::string & expected_message)
+{
+  ASSERT_FALSE(result.has_value());
+  EXPECT_NE(result.error().message.find(expected_message), std::string::npos)
+    << result.error().message;
+}
+
+TEST(ConfigParserTest, ParseMinimalConfig) {
     auto yaml =
-      YAML::Load(
+    YAML::Load(
       R"(
       models:
         policy:
@@ -48,12 +67,12 @@ namespace isaac_deploy_core {
     ASSERT_TRUE(result.has_value());
     EXPECT_TRUE(result->inputs.IsSequence());
     EXPECT_TRUE(result->outputs.IsSequence());
-    EXPECT_TRUE(result->feedback_connections.empty());
-  }
+    EXPECT_TRUE(result->feedback_flow.empty());
+}
 
-  TEST(ConfigParserTest, ParseFeedbackConnections) {
+TEST(ConfigParserTest, ParseFeedbackFlow) {
     auto yaml =
-      YAML::Load(
+    YAML::Load(
       R"(
       models:
         policy:
@@ -73,7 +92,7 @@ namespace isaac_deploy_core {
           policy: [joint_pos]
         outputs:
           policy: [actions]
-        feedback_connections:
+        feedback_flow:
           policy/actions: [policy/last_actions]
         data_flow: {}
     )");
@@ -81,15 +100,15 @@ namespace isaac_deploy_core {
     ASSERT_TRUE(result.has_value());
 
     // Model prefix should be stripped.
-    EXPECT_EQ(result->feedback_connections.size(), 1);
-    EXPECT_EQ(result->feedback_connections.count("actions"), 1);
-    EXPECT_EQ(result->feedback_connections.at("actions").size(), 1);
-    EXPECT_EQ(result->feedback_connections.at("actions")[0], "last_actions");
-  }
+    EXPECT_EQ(result->feedback_flow.size(), 1);
+    EXPECT_EQ(result->feedback_flow.count("actions"), 1);
+    EXPECT_EQ(result->feedback_flow.at("actions").size(), 1);
+    EXPECT_EQ(result->feedback_flow.at("actions")[0], "last_actions");
+}
 
-  TEST(ConfigParserTest, ParseFeedbackConnectionsMultipleInputs) {
+TEST(ConfigParserTest, ParseFeedbackFlowMultipleInputs) {
     auto yaml =
-      YAML::Load(
+    YAML::Load(
       R"(
       models:
         policy:
@@ -105,27 +124,27 @@ namespace isaac_deploy_core {
             kind: out
             shape: [1, 3]
       pipeline:
-        feedback_connections:
+        feedback_flow:
           policy/out: [policy/a, policy/b]
         data_flow: {}
     )");
     auto result = parse_and_merge(yaml);
     ASSERT_TRUE(result.has_value());
 
-    EXPECT_EQ(result->feedback_connections.at("out").size(), 2);
-    EXPECT_EQ(result->feedback_connections.at("out")[0], "a");
-    EXPECT_EQ(result->feedback_connections.at("out")[1], "b");
-  }
+    EXPECT_EQ(result->feedback_flow.at("out").size(), 2);
+    EXPECT_EQ(result->feedback_flow.at("out")[0], "a");
+    EXPECT_EQ(result->feedback_flow.at("out")[1], "b");
+}
 
-  TEST(ConfigParserTest, NoModelsSection) {
+TEST(ConfigParserTest, NoModelsSection) {
     auto yaml = YAML::Load("pipeline: {}");
     auto result = parse_graph_config(yaml);
     EXPECT_FALSE(result.has_value());
-  }
+}
 
-  TEST(ConfigParserTest, MultiModelRequiresPipeline) {
+TEST(ConfigParserTest, MultiModelRequiresPipeline) {
     auto yaml =
-      YAML::Load(
+    YAML::Load(
       R"(
       models:
         a:
@@ -139,11 +158,74 @@ namespace isaac_deploy_core {
     ASSERT_TRUE(graph_result.has_value());
     auto result = merge_graph_to_model_config(*graph_result, yaml);
     EXPECT_FALSE(result.has_value());
-  }
+}
 
-  TEST(ConfigParserTest, ParseParameters) {
+TEST(ConfigParserTest, MultiModelRequiresPipelineInputsAndOutputs) {
     auto yaml =
-      YAML::Load(
+    YAML::Load(
+      R"(
+      models:
+        model_a:
+          inputs:
+          - name: ai1
+            kind: state/joint/position
+            shape: [1, 1]
+          outputs:
+          - name: ao1
+            kind: ao1
+            shape: [1, 1]
+        model_b:
+          inputs:
+          - name: bi1
+            kind: data_flow/ao1
+            shape: [1, 1]
+          outputs:
+          - name: bo1
+            kind: joint_pos_targets
+            shape: [1, 1]
+      pipeline: {}
+    )");
+    auto result = parse_and_merge(yaml);
+    expect_error_contains(result, "pipeline.inputs");
+}
+
+TEST(ConfigParserTest, MultiModelRequiresNonEmptyPipelineOutputs) {
+    auto yaml =
+    YAML::Load(
+      R"(
+      models:
+        model_a:
+          inputs:
+          - name: ai1
+            kind: state/joint/position
+            shape: [1, 1]
+          outputs:
+          - name: ao1
+            kind: ao1
+            shape: [1, 1]
+        model_b:
+          inputs:
+          - name: bi1
+            kind: data_flow/ao1
+            shape: [1, 1]
+          outputs:
+          - name: bo1
+            kind: joint_pos_targets
+            shape: [1, 1]
+      pipeline:
+        inputs:
+          model_a: [ai1]
+        outputs: {}
+        data_flow:
+          model_a/ao1: [model_b/bi1]
+    )");
+    auto result = parse_and_merge(yaml);
+    expect_error_contains(result, "pipeline.outputs");
+}
+
+TEST(ConfigParserTest, ParseParameters) {
+    auto yaml =
+    YAML::Load(
       R"(
       models:
         policy:
@@ -157,17 +239,40 @@ namespace isaac_deploy_core {
             shape: [1, 3]
           parameters:
             model_path: /path/to/model.onnx
-            backend: triton
+            backend: onnx
     )");
     auto result = parse_and_merge(yaml);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->model_path, "/path/to/model.onnx");
-    EXPECT_EQ(result->backend, "triton");
-  }
+    EXPECT_EQ(result->backend, "onnx");
+}
 
-  TEST(ConfigParserTest, FeedbackConnectionsScalarRejected) {
+TEST(ConfigParserTest, ParseInitialValuesPath) {
     auto yaml =
-      YAML::Load(
+    YAML::Load(
+      R"(
+      models:
+        policy:
+          inputs:
+          - name: a
+            kind: a
+            shape: [1, 3]
+          outputs:
+          - name: b
+            kind: b
+            shape: [1, 3]
+      pipeline:
+        initial_values: initial_values.safetensors
+        data_flow: {}
+    )");
+    auto result = parse_graph_config(yaml);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->initial_values_path, "initial_values.safetensors");
+}
+
+TEST(ConfigParserTest, DeprecatedFeedbackConnectionsIgnored) {
+    auto yaml =
+    YAML::Load(
       R"(
       models:
         policy:
@@ -181,16 +286,40 @@ namespace isaac_deploy_core {
             shape: [1, 3]
       pipeline:
         feedback_connections:
+          policy/actions: [policy/last_actions]
+        data_flow: {}
+    )");
+    auto result = parse_and_merge(yaml);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->feedback_flow.empty());
+}
+
+TEST(ConfigParserTest, FeedbackFlowScalarRejected) {
+    auto yaml =
+    YAML::Load(
+      R"(
+      models:
+        policy:
+          inputs:
+          - name: last_actions
+            kind: last_actions
+            shape: [1, 3]
+          outputs:
+          - name: actions
+            kind: actions
+            shape: [1, 3]
+      pipeline:
+        feedback_flow:
           policy/actions: policy/last_actions
         data_flow: {}
     )");
     auto result = parse_graph_config(yaml);
     EXPECT_FALSE(result.has_value());
-  }
+}
 
-  TEST(ConfigParserTest, FeedbackConnectionsUnknownOutputRejected) {
+TEST(ConfigParserTest, FeedbackFlowUnknownOutputRejected) {
     auto yaml =
-      YAML::Load(
+    YAML::Load(
       R"(
       models:
         policy:
@@ -203,17 +332,63 @@ namespace isaac_deploy_core {
             kind: actions
             shape: [1, 3]
       pipeline:
-        feedback_connections:
+        feedback_flow:
           policy/nonexistent: [policy/last_actions]
         data_flow: {}
     )");
     auto result = parse_graph_config(yaml);
     EXPECT_FALSE(result.has_value());
-  }
+}
 
-  TEST(ConfigParserTest, MultiModelMergedConfig) {
+TEST(ConfigParserTest, FeedbackFlowUnknownModelRejected) {
     auto yaml =
-      YAML::Load(
+    YAML::Load(
+      R"(
+      models:
+        policy:
+          inputs:
+          - name: last_actions
+            kind: last_actions
+            shape: [1, 3]
+          outputs:
+          - name: actions
+            kind: actions
+            shape: [1, 3]
+      pipeline:
+        feedback_flow:
+          policy_typo/actions: [policy/last_actions]
+        data_flow: {}
+    )");
+    auto result = parse_graph_config(yaml);
+    expect_graph_error_contains(result, "feedback_flow key 'policy_typo/actions'");
+}
+
+TEST(ConfigParserTest, FeedbackFlowUnprefixedKeyRejected) {
+    auto yaml =
+    YAML::Load(
+      R"(
+      models:
+        policy:
+          inputs:
+          - name: last_actions
+            kind: last_actions
+            shape: [1, 3]
+          outputs:
+          - name: actions
+            kind: actions
+            shape: [1, 3]
+      pipeline:
+        feedback_flow:
+          actions: [policy/last_actions]
+        data_flow: {}
+    )");
+    auto result = parse_graph_config(yaml);
+    expect_graph_error_contains(result, "feedback_flow key 'actions'");
+}
+
+TEST(ConfigParserTest, MultiModelMergedConfig) {
+    auto yaml =
+    YAML::Load(
       R"(
       models:
         model_a:
@@ -236,7 +411,7 @@ namespace isaac_deploy_core {
             shape: [1, 1]
           parameters:
             model_path: model_a.onnx
-            backend: triton
+            backend: onnx
         model_b:
           inputs:
           - name: bi1
@@ -257,13 +432,13 @@ namespace isaac_deploy_core {
             shape: [1, 1]
           parameters:
             model_path: model_b.onnx
-            backend: triton
+            backend: onnx
       pipeline:
         inputs:
           model_a: [ai1]
         outputs:
           model_b: [bo1]
-        feedback_connections:
+        feedback_flow:
           model_a/ao2: [model_a/ai2]
           model_b/bo3: [model_a/ai3]
           model_b/bo2: [model_b/bi2]
@@ -278,34 +453,34 @@ namespace isaac_deploy_core {
     ASSERT_TRUE(result->inputs.IsSequence());
     EXPECT_EQ(result->inputs.size(), 1);
 
-    std::vector < std::string > input_names;
+    std::vector<std::string> input_names;
     for (const auto & input : result->inputs) {
-      input_names.push_back(input["name"].as < std::string > ());
+    input_names.push_back(input["name"].as<std::string>());
     }
-    EXPECT_EQ(input_names, (std::vector < std::string > {"ai1"}));
+    EXPECT_EQ(input_names, (std::vector<std::string> {"ai1"}));
 
     // Merged outputs: bo1 (dangling) only. Feedback sources (ao2, bo2, bo3)
     // are handled by InferenceRunnerNodes directly.
     ASSERT_TRUE(result->outputs.IsSequence());
     EXPECT_EQ(result->outputs.size(), 1);
 
-    std::vector < std::string > output_names;
+    std::vector<std::string> output_names;
     for (const auto & output : result->outputs) {
-      output_names.push_back(output["name"].as < std::string > ());
+    output_names.push_back(output["name"].as<std::string>());
     }
-    EXPECT_EQ(output_names, (std::vector < std::string > {"bo1"}));
+    EXPECT_EQ(output_names, (std::vector<std::string> {"bo1"}));
 
     // Feedback connections are empty in merged config (handled by runners).
-    EXPECT_TRUE(result->feedback_connections.empty());
+    EXPECT_TRUE(result->feedback_flow.empty());
 
     // model_path and backend should be empty for merged config.
     EXPECT_TRUE(result->model_path.empty());
     EXPECT_TRUE(result->backend.empty());
-  }
+}
 
-  TEST(ConfigParserTest, ParseGraphConfigSingleModel) {
+TEST(ConfigParserTest, ParseGraphConfigSingleModel) {
     auto yaml =
-      YAML::Load(
+    YAML::Load(
       R"(
       models:
         policy:
@@ -319,13 +494,13 @@ namespace isaac_deploy_core {
             shape: [1, 3]
           parameters:
             model_path: /path/to/model.onnx
-            backend: triton
+            backend: onnx
       pipeline:
         inputs:
           policy: [joint_pos]
         outputs:
           policy: [actions]
-        feedback_connections: {}
+        feedback_flow: {}
         data_flow: {}
     )");
     auto result = parse_graph_config(yaml);
@@ -334,13 +509,13 @@ namespace isaac_deploy_core {
     EXPECT_EQ(result->models.size(), 1);
     EXPECT_EQ(result->models[0].first, "policy");
     EXPECT_EQ(result->models[0].second.model_path, "/path/to/model.onnx");
-    EXPECT_EQ(result->models[0].second.backend, "triton");
+    EXPECT_EQ(result->models[0].second.backend, "onnx");
     EXPECT_TRUE(result->data_flow.empty());
-  }
+}
 
-  TEST(ConfigParserTest, ParseGraphConfigMultiModel) {
+TEST(ConfigParserTest, ParseGraphConfigMultiModel) {
     auto yaml =
-      YAML::Load(
+    YAML::Load(
       R"(
       models:
         model_a:
@@ -354,7 +529,7 @@ namespace isaac_deploy_core {
             shape: [1, 1]
           parameters:
             model_path: a.onnx
-            backend: triton
+            backend: onnx
         model_b:
           inputs:
           - name: bi1
@@ -366,13 +541,13 @@ namespace isaac_deploy_core {
             shape: [1, 1]
           parameters:
             model_path: b.onnx
-            backend: triton
+            backend: onnx
       pipeline:
         inputs:
           model_a: [ai1]
         outputs:
           model_b: [bo1]
-        feedback_connections:
+        feedback_flow:
           model_a/ao1: [model_a/ai1]
         data_flow:
           model_a/ao1: [model_b/bi1]
@@ -388,17 +563,17 @@ namespace isaac_deploy_core {
     EXPECT_EQ(result->models[1].second.model_path, "b.onnx");
 
     // Per-model feedback: model_a has ao1->[ai1], model_b has none.
-    EXPECT_EQ(result->models[0].second.feedback_connections.size(), 1);
+    EXPECT_EQ(result->models[0].second.feedback_flow.size(), 1);
     EXPECT_EQ(
-      result->models[0].second.feedback_connections.at("ao1"),
-      (std::vector < std::string > {"ai1"}));
-    EXPECT_TRUE(result->models[1].second.feedback_connections.empty());
+      result->models[0].second.feedback_flow.at("ao1"),
+    (std::vector<std::string> {"ai1"}));
+    EXPECT_TRUE(result->models[1].second.feedback_flow.empty());
 
     // Data flow preserved with full prefixed keys.
     EXPECT_EQ(result->data_flow.size(), 1);
     EXPECT_EQ(
       result->data_flow.at("model_a/ao1"),
-      (std::vector < std::string > {"model_b/bi1"}));
-  }
+    (std::vector<std::string> {"model_b/bi1"}));
+}
 
 }  // namespace isaac_deploy_core

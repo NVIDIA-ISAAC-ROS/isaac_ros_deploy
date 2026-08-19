@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,11 +26,16 @@ from onnx import helper, TensorProto
 
 
 def create_passthrough_onnx(output_path: Path, num_joints: int = 3):
-    """Create a passthrough ONNX model using onnx helper.
+    """
+    Create a passthrough ONNX model using ONNX helper utilities.
 
     Args:
-        output_path: Path to save the ONNX model.
-        num_joints: Number of joints (default 3).
+    ----
+    output_path : Path
+        Path to save the ONNX model.
+    num_joints : int
+        Number of joints.
+
     """
     # Define inputs
     joint_pos = helper.make_tensor_value_info(

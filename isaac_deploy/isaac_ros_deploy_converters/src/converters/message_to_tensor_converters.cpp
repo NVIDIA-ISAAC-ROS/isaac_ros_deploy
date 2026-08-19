@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +18,7 @@
 
 #include <mutex>
 
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
@@ -182,6 +184,59 @@ public:
   }
 };
 
+class PoseStampedPositionConverter : public MessageToTensorConverter
+{
+public:
+  std::string get_kind() const override {return "state/body/position";}
+  std::string get_message_type() const override {return "geometry_msgs/msg/PoseStamped";}
+
+  torch::Tensor convert(const std::shared_ptr<rclcpp::SerializedMessage> & msg) override
+  {
+    geometry_msgs::msg::PoseStamped pose_stamped;
+    rclcpp::Serialization<geometry_msgs::msg::PoseStamped> serializer;
+    serializer.deserialize_message(msg.get(), &pose_stamped);
+
+    const auto & pos = pose_stamped.pose.position;
+    return torch::tensor(
+      {{static_cast<float>(pos.x),
+        static_cast<float>(pos.y),
+        static_cast<float>(pos.z)}},
+      torch::kFloat32);
+  }
+
+  isaac_deploy_core::TensorSpec get_tensor_spec() const override
+  {
+    return {.names = {{}, {"x", "y", "z"}}};
+  }
+};
+
+class PoseStampedRotationConverter : public MessageToTensorConverter
+{
+public:
+  std::string get_kind() const override {return "state/body/rotation";}
+  std::string get_message_type() const override {return "geometry_msgs/msg/PoseStamped";}
+
+  torch::Tensor convert(const std::shared_ptr<rclcpp::SerializedMessage> & msg) override
+  {
+    geometry_msgs::msg::PoseStamped pose_stamped;
+    rclcpp::Serialization<geometry_msgs::msg::PoseStamped> serializer;
+    serializer.deserialize_message(msg.get(), &pose_stamped);
+
+    const auto & ori = pose_stamped.pose.orientation;
+    return torch::tensor(
+      {{static_cast<float>(ori.x),
+        static_cast<float>(ori.y),
+        static_cast<float>(ori.z),
+        static_cast<float>(ori.w)}},
+      torch::kFloat32);
+  }
+
+  isaac_deploy_core::TensorSpec get_tensor_spec() const override
+  {
+    return {.names = {{}, {"qx", "qy", "qz", "qw"}}};
+  }
+};
+
 // ============================================================================
 // ReferenceMotion converters
 // ============================================================================
@@ -315,7 +370,8 @@ public:
 
   isaac_deploy_core::TensorSpec get_tensor_spec() const override
   {
-    return {.names = {{}, {"lin_x", "lin_y", "lin_z", "ang_x", "ang_y", "ang_z"}}};
+    return {.names = {{},
+        {"lin_vel_x", "lin_vel_y", "lin_vel_z", "ang_vel_x", "ang_vel_y", "ang_vel_z"}}};
   }
 };
 
@@ -343,7 +399,8 @@ public:
 
   isaac_deploy_core::TensorSpec get_tensor_spec() const override
   {
-    return {.names = {{}, {"lin_x", "lin_y", "lin_z", "ang_x", "ang_y", "ang_z"}}};
+    return {.names = {{},
+        {"lin_vel_x", "lin_vel_y", "lin_vel_z", "ang_vel_x", "ang_vel_y", "ang_vel_z"}}};
   }
 };
 
@@ -532,6 +589,16 @@ void initialize_input_converters()
         "state/body/rotation", "sensor_msgs/msg/Imu",
         [](const std::string &) {
           return std::make_shared<AnchorBodyRotConverter>();
+        });
+      registry.register_converter(
+        "state/body/position", "geometry_msgs/msg/PoseStamped",
+        [](const std::string &) {
+          return std::make_shared<PoseStampedPositionConverter>();
+        });
+      registry.register_converter(
+        "state/body/rotation", "geometry_msgs/msg/PoseStamped",
+        [](const std::string &) {
+          return std::make_shared<PoseStampedRotationConverter>();
         });
       registry.register_converter(
         "state/body/angular_velocity", "sensor_msgs/msg/Imu",

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,7 +16,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Create two ONNX models for multi-model pipeline testing.
+"""
+Create two ONNX models for multi-model pipeline testing.
 
 Model A: ao1 = ao2 = ai1 + ai2 + ai3   (3 inputs, 2 outputs)
 Model B: bo1 = bo2 = bo3 = bi1 + bi2    (2 inputs, 3 outputs)

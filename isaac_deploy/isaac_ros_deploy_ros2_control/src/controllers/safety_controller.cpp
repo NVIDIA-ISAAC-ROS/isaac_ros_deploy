@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -863,9 +864,9 @@ void SafetyController::write_outputs_to_interfaces()
     // kBlend adds (1 - blend) * gravity so gravity is full at blend 0 and gone at 1.
     if (id_solver_ && gravity_apply_[i]) {
       const double gravity_tau = gravity_tau_(static_cast<Eigen::Index>(i));
-      eff_cmd = (gravity_mode_ == GravityMode::kOverwrite)
-        ? gravity_tau
-        : eff_cmd + (1.0 - current_blend_ratio_) * gravity_tau;
+      eff_cmd = (gravity_mode_ == GravityMode::kOverwrite) ?
+        gravity_tau :
+        eff_cmd + (1.0 - current_blend_ratio_) * gravity_tau;
     }
 
     (void)command_interfaces_[velocity_command_indices_[i]].set_value(vel_cmd);

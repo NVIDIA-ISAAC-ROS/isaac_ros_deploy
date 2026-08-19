@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+title = "Isaac ROS Deploy - Isaac Sim Extension"
+description = """
+Extension to add Isaac ROS Deploy support in Isaac Sim.
+Contains:
+- Tooling to create USD files that are compatible with Isaac ROS Deploy
+- A plugin to inject kp/kd gains into the actuators in Isaac Sim
+- A plugin to add a virtual gantry to Isaac Sim.
+"""
+version = "0.1.0"
+authors = ["NVIDIA Isaac ROS Maintainers"]
+category = "Isaac Sim"
+keywords = ["isaac-sim", "ros2-control", "isaac-ros-deploy"]
+readme = "../../README.md"
+repository = ""
+
+[dependencies]
+"isaacsim.ros2.bridge" = {}
+"isaacsim.core.experimental.actuators" = {}
+
+[[python.module]]
+name = "isaac_ros_deploy_isaac_sim_extension"
+# config/extension.toml lives inside the Python package, so the ext root
+# is the package dir itself. The actual import root is one level up
+# (the site-packages dir), so point Kit's module path there.
+path = ".."
+
+[settings]
+# Kit-settings the extension reads in `on_startup`. Override on the
+# command line with `--/exts/isaac_ros_deploy_isaac_sim_extension/usd=...` or
+# inside a `.kit` experience under `[settings.exts."isaac_ros_deploy_isaac_sim_extension"]`.
+exts."isaac_ros_deploy_isaac_sim_extension".usd = ""
+# Empty robot_path -> auto-detect the articulation-root prim from the stage.
+exts."isaac_ros_deploy_isaac_sim_extension".robot_path = ""
+exts."isaac_ros_deploy_isaac_sim_extension".backend = "physx"
+# Physics step rate (Hz).
+exts."isaac_ros_deploy_isaac_sim_extension".physics_hz = 200.0
+exts."isaac_ros_deploy_isaac_sim_extension".gantry_enabled = true

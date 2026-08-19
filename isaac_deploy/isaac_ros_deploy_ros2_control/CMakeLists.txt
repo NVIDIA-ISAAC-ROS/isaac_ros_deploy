@@ -36,9 +36,9 @@ find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(realtime_tools REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(isaac_ros_deploy_interfaces REQUIRED)
-find_package(realtime_tools REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(isaac_ros_inverse_dynamics REQUIRED)
@@ -168,6 +168,16 @@ set_target_properties(tensor_interface_utils PROPERTIES
   BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
 )
 
+# LEAPP backend to inference-runner mapping (header-only).
+add_library(leapp_backend_mapping INTERFACE)
+target_include_directories(leapp_backend_mapping INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(leapp_backend_mapping INTERFACE
+  isaac_deploy_core::expected
+)
+
 # Controllers Library.
 add_library(isaac_ros_deploy_ros2_control_controllers SHARED
   src/converters/state_interface_converters.cpp
@@ -200,9 +210,11 @@ ament_target_dependencies(isaac_ros_deploy_ros2_control_controllers
   isaac_ros_deploy_converters
 )
 target_link_libraries(isaac_ros_deploy_ros2_control_controllers
+  leapp_backend_mapping
   tensor_interface_utils
   isaac_deploy_core::config_parser
   isaac_deploy_core::inference_controller
+  isaac_deploy_core::safetensors_loader
   isaac_ros_deploy_converters::converters
   safety_controller
   isaac_ros_inverse_dynamics::inverse_dynamics_solver
@@ -218,6 +230,7 @@ set_target_properties(isaac_ros_deploy_ros2_control_controllers PROPERTIES
 
 # Hardware Interfaces Library.
 add_library(isaac_ros_deploy_ros2_control_hardware SHARED
+  src/hardware/topic_based_system_interface.cpp
   src/hardware/topic_sensor_interface.cpp
 )
 target_include_directories(isaac_ros_deploy_ros2_control_hardware PUBLIC
@@ -229,7 +242,9 @@ ament_target_dependencies(isaac_ros_deploy_ros2_control_hardware
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  realtime_tools
   std_msgs
+  sensor_msgs
 )
 
 # Export controller plugin.
@@ -249,6 +264,7 @@ install(
     interpolate
     safety_controller
     tensor_interface_utils
+    leapp_backend_mapping
     isaac_ros_deploy_ros2_control_controllers
     isaac_ros_deploy_ros2_control_hardware
   EXPORT isaac_ros_deploy_ros2_control_targets
@@ -304,6 +320,9 @@ if(BUILD_TESTING)
   add_converter_test(test_state_interface_converters test/test_state_interface_converters.cpp)
   add_converter_test(test_command_interface_converters test/test_command_interface_converters.cpp)
   add_converter_test(test_gain_utils test/test_gain_utils.cpp)
+
+  ament_add_gtest(test_leapp_backend_mapping test/test_leapp_backend_mapping.cpp)
+  target_link_libraries(test_leapp_backend_mapping leapp_backend_mapping)
 
   # Safety controller tests.
   ament_add_gtest(velocity_threshold_test test/test_velocity_threshold.cpp)

@@ -15,6 +15,7 @@
 
 #include <gtest/gtest.h>
 
+#include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "rclcpp/serialization.hpp"
@@ -59,6 +60,24 @@ TEST_F(MessageToTensorConverterTest, ExplicitTwistSelection)
     "command/body/velocity", {}, "geometry_msgs/msg/Twist");
   ASSERT_NE(converter, nullptr);
   EXPECT_EQ(converter->get_message_type(), "geometry_msgs/msg/Twist");
+}
+
+TEST_F(MessageToTensorConverterTest, ExplicitPoseStampedPositionSelection)
+{
+  auto & registry = MessageToTensorConverterRegistry::instance();
+  const auto converter = registry.create_for_kind(
+    "state/body/position", {}, "geometry_msgs/msg/PoseStamped");
+  ASSERT_NE(converter, nullptr);
+  EXPECT_EQ(converter->get_message_type(), "geometry_msgs/msg/PoseStamped");
+}
+
+TEST_F(MessageToTensorConverterTest, ExplicitPoseStampedRotationSelection)
+{
+  auto & registry = MessageToTensorConverterRegistry::instance();
+  const auto converter = registry.create_for_kind(
+    "state/body/rotation", {}, "geometry_msgs/msg/PoseStamped");
+  ASSERT_NE(converter, nullptr);
+  EXPECT_EQ(converter->get_message_type(), "geometry_msgs/msg/PoseStamped");
 }
 
 TEST_F(MessageToTensorConverterTest, UnknownMessageTypeReturnsNullptr)
@@ -137,6 +156,54 @@ TEST_F(MessageToTensorConverterTest, TwistStampedConverterOutput)
   EXPECT_FLOAT_EQ(accessor[0][5], 6.0f);
 }
 
+TEST_F(MessageToTensorConverterTest, PoseStampedPositionConverterOutput)
+{
+  auto & registry = MessageToTensorConverterRegistry::instance();
+  const auto converter = registry.create_for_kind(
+    "state/body/position", {}, "geometry_msgs/msg/PoseStamped");
+
+  geometry_msgs::msg::PoseStamped pose_stamped;
+  pose_stamped.pose.position.x = 0.11;
+  pose_stamped.pose.position.y = -0.22;
+  pose_stamped.pose.position.z = 0.33;
+
+  const auto tensor = converter->convert(serialize(pose_stamped));
+  ASSERT_EQ(tensor.sizes(), (std::vector<int64_t>{1, 3}));
+
+  const auto accessor = tensor.accessor<float, 2>();
+  EXPECT_FLOAT_EQ(accessor[0][0], 0.11f);
+  EXPECT_FLOAT_EQ(accessor[0][1], -0.22f);
+  EXPECT_FLOAT_EQ(accessor[0][2], 0.33f);
+
+  const auto spec = converter->get_tensor_spec();
+  EXPECT_EQ(spec.names, (std::vector<std::vector<std::string>>{{}, {"x", "y", "z"}}));
+}
+
+TEST_F(MessageToTensorConverterTest, PoseStampedRotationConverterOutput)
+{
+  auto & registry = MessageToTensorConverterRegistry::instance();
+  const auto converter = registry.create_for_kind(
+    "state/body/rotation", {}, "geometry_msgs/msg/PoseStamped");
+
+  geometry_msgs::msg::PoseStamped pose_stamped;
+  pose_stamped.pose.orientation.x = 0.1;
+  pose_stamped.pose.orientation.y = 0.2;
+  pose_stamped.pose.orientation.z = 0.3;
+  pose_stamped.pose.orientation.w = 0.9;
+
+  const auto tensor = converter->convert(serialize(pose_stamped));
+  ASSERT_EQ(tensor.sizes(), (std::vector<int64_t>{1, 4}));
+
+  const auto accessor = tensor.accessor<float, 2>();
+  EXPECT_FLOAT_EQ(accessor[0][0], 0.1f);
+  EXPECT_FLOAT_EQ(accessor[0][1], 0.2f);
+  EXPECT_FLOAT_EQ(accessor[0][2], 0.3f);
+  EXPECT_FLOAT_EQ(accessor[0][3], 0.9f);
+
+  const auto spec = converter->get_tensor_spec();
+  EXPECT_EQ(spec.names, (std::vector<std::vector<std::string>>{{}, {"qx", "qy", "qz", "qw"}}));
+}
+
 TEST_F(MessageToTensorConverterTest, BothConvertersProduceSameTensorSpec)
 {
   auto & registry = MessageToTensorConverterRegistry::instance();
@@ -147,6 +214,19 @@ TEST_F(MessageToTensorConverterTest, BothConvertersProduceSameTensorSpec)
   const auto twist_spec = twist_conv->get_tensor_spec();
   const auto stamped_spec = stamped_conv->get_tensor_spec();
   EXPECT_EQ(twist_spec.names, stamped_spec.names);
+}
+
+TEST_F(MessageToTensorConverterTest, TwistConvertersUseIsaacLabVelocityNames)
+{
+  auto & registry = MessageToTensorConverterRegistry::instance();
+  const auto converter = registry.create_for_kind("command/body/velocity");
+
+  const auto spec = converter->get_tensor_spec();
+  EXPECT_EQ(
+    spec.names,
+    (std::vector<std::vector<std::string>>{
+      {},
+      {"lin_vel_x", "lin_vel_y", "lin_vel_z", "ang_vel_x", "ang_vel_y", "ang_vel_z"}}));
 }
 
 }  // namespace isaac_ros_deploy_converters

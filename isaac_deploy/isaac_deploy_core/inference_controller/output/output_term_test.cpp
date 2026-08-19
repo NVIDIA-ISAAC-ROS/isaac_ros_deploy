@@ -17,26 +17,27 @@
 
 #include <gtest/gtest.h>
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
-  TEST(OutputTermTest, CreateSuccess) {
+TEST(OutputTermTest, CreateSuccess) {
     OutputTermConfig config {
-      .name = "joint_pos_targets",
-      .kind = "joint_pos_targets",
-      .shape = {1, 3},
+    .name = "joint_pos_targets",
+    .kind = "joint_pos_targets",
+    .shape = {1, 3},
     };
     auto result = OutputTerm::create(config);
     ASSERT_TRUE(result.has_value());
     EXPECT_EQ(result->name(), "joint_pos_targets");
-  }
+}
 
-  TEST(OutputTermTest, CreateFailsWithEmptyName) {
+TEST(OutputTermTest, CreateFailsWithEmptyName) {
     OutputTermConfig config {.name = "", .kind = "out", .shape = {1, 3}};
     auto result = OutputTerm::create(config);
     EXPECT_FALSE(result.has_value());
-  }
+}
 
-  TEST(OutputTermTest, SimplePassthrough) {
+TEST(OutputTermTest, SimplePassthrough) {
     OutputTermConfig config {.name = "out", .kind = "out", .shape = {1, 3}};
     auto term_result = OutputTerm::create(config);
     ASSERT_TRUE(term_result.has_value());
@@ -53,14 +54,14 @@ namespace isaac_deploy_core {
     ASSERT_TRUE(advance_result.has_value());
 
     EXPECT_TRUE(torch::allclose(output.tensor, nn_output));
-  }
+}
 
-  TEST(OutputTermTest, Reordering) {
+TEST(OutputTermTest, Reordering) {
     OutputTermConfig config {
-      .name = "out",
-      .kind = "out",
-      .shape = {1, 3},
-      .element_names = {{"batch"}, {"c", "a", "b"}},  // NN order
+    .name = "out",
+    .kind = "out",
+    .shape = {1, 3},
+    .element_names = {{"batch"}, {"c", "a", "b"}},    // NN order
     };
     auto term_result = OutputTerm::create(config);
     ASSERT_TRUE(term_result.has_value());
@@ -80,6 +81,6 @@ namespace isaac_deploy_core {
     // Expected middleware output: a=2, b=3, c=1
     auto expected = torch::tensor({{2.0f, 3.0f, 1.0f}});
     EXPECT_TRUE(torch::allclose(output.tensor, expected));
-  }
+}
 
 }  // namespace isaac_deploy_core

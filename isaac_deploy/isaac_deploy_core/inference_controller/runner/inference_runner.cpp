@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,22 +19,24 @@
 #include "isaac_deploy_core/inference_controller/runner/mock_runner.hpp"
 #include "isaac_deploy_core/inference_controller/runner/triton_runner.hpp"
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
-  expected < std::unique_ptr < InferenceRunner >> InferenceRunner::create(const Config & config) {
-    if (config.runner_type == "triton") {
-      TritonRunnerConfig triton_config{.model_path = config.model_path};
-      return TritonRunner::create(triton_config);
-    }
+expected<std::unique_ptr<InferenceRunner>> InferenceRunner::create(const Config & config)
+{
+  if (config.runner_type == "triton") {
+    TritonRunnerConfig triton_config{.model_path = config.model_path};
+    return TritonRunner::create(triton_config);
+  }
 
-    if (config.runner_type == "mock") {
-      return MockRunner::create();
-    }
+  if (config.runner_type == "mock") {
+    return MockRunner::create();
+  }
 
-    return tl::unexpected(
+  return tl::unexpected(
       make_error(
         Error::Code::kInvalidArgument,
         "Unknown runner type: " + config.runner_type));
-  }
+}
 
 }  // namespace isaac_deploy_core

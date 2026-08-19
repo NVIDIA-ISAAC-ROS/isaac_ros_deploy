@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -93,7 +94,8 @@ private:
 
   /// Create subscription groups based on source_to_topic mapping.
   void create_subscription_groups(
-    const std::unordered_map<std::string, torch::Dtype> & feedback_dtypes);
+    const std::unordered_map<std::string, torch::Dtype> & feedback_dtypes,
+    const isaac_deploy_core::TensorDict & feedback_initial_values);
 
   /// Check if input timestamps are synchronized and warn if not.
   void validate_input_synchronization(const rclcpp::Time & current_time);

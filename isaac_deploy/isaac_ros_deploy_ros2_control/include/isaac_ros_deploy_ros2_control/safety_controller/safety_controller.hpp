@@ -1,4 +1,5 @@
-// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+// Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,39 +29,40 @@
 #include "isaac_ros_deploy_ros2_control/safety_controller/safety_strategy.hpp"
 #include "isaac_ros_deploy_ros2_control/safety_controller/strategies/interpolate.hpp"
 
-namespace isaac_deploy_core {
+namespace isaac_deploy_core
+{
 
 /// Configuration for the SafetyController.
-  struct SafetyControllerConfig
-  {
+struct SafetyControllerConfig
+{
     /// Blend strategy configuration.
-    struct BlendConfig
-    {
+  struct BlendConfig
+  {
       /// Type of blend strategy to use.
-      BlendStrategy type = BlendStrategy::kInterpolate;
+    BlendStrategy type = BlendStrategy::kInterpolate;
       /// Maximum velocities per joint (for kInterpolate strategy).
-      std::vector < double > max_velocities;
+    std::vector<double> max_velocities;
       /// Optional per-joint default ("home") position (kInterpolate).
       /// When non-empty, blend_ratio = 0 slews to this pose instead of the activation pose.
-      std::vector < double > default_position;
-    };
+    std::vector<double> default_position;
+  };
 
     /// Out-of-domain detection configuration.
-    struct OutOfDomainDetectionConfig
-    {
+  struct OutOfDomainDetectionConfig
+  {
       /// Velocity threshold detection configuration.
-      VelocityThresholdConfig velocity_threshold;
-    };
+    VelocityThresholdConfig velocity_threshold;
+  };
 
     /// Blend strategy configuration.
-    BlendConfig blend_ratio;
+  BlendConfig blend_ratio;
 
     /// Out-of-domain detection configuration.
-    OutOfDomainDetectionConfig out_of_domain_detection;
+  OutOfDomainDetectionConfig out_of_domain_detection;
 
     /// Create a SafetyControllerConfig from a YAML node.
-    static expected < SafetyControllerConfig > create_from_yaml(const YAML::Node & yaml);
-  };
+  static expected<SafetyControllerConfig> create_from_yaml(const YAML::Node & yaml);
+};
 
 /// SafetyController applies safety constraints to joint commands.
 ///
@@ -76,54 +78,56 @@ namespace isaac_deploy_core {
 ///
 /// And produces:
 /// - safe_positions: Positions that satisfy safety constraints
-  class SafetyController {
+class SafetyController {
 public:
     /// Create the controller from configuration.
-    static expected < SafetyController > create(const SafetyControllerConfig & config);
+  static expected<SafetyController> create(const SafetyControllerConfig & config);
 
     /// Activate the controller.
     /// @param input_specs Specs for input tensors.
     /// @param inputs Initial input tensors.
     /// @param output_specs Specs for output tensors.
     /// @param outputs Pre-allocated output tensors.
-    expected < void > activate(
-      const std::vector < TensorSpec > &input_specs,
-      const std::vector < NamedTensor > &inputs,
-      const std::vector < TensorSpec > &output_specs,
-      std::vector < NamedTensor > &outputs);
+  expected<void> activate(
+    const std::vector<TensorSpec> & input_specs,
+    const std::vector<NamedTensor> & inputs,
+    const std::vector<TensorSpec> & output_specs,
+    std::vector<NamedTensor> & outputs);
 
     /// Deactivate the controller.
-    expected < void > deactivate();
+  expected<void> deactivate();
 
     /// Advance the controller by one timestep.
     /// This method is real-time safe (does not allocate).
     /// @param timestamp_ns Current timestamp in nanoseconds.
     /// @param inputs Input tensors: command_positions, current_positions, blend_ratio, dt.
     /// @param outputs Output tensors: safe_positions.
-    expected < void > advance(
-      int64_t timestamp_ns, const std::vector < NamedTensor > &inputs,
-      std::vector < NamedTensor > &outputs);
+  expected<void> advance(
+    int64_t timestamp_ns, const std::vector<NamedTensor> & inputs,
+    std::vector<NamedTensor> & outputs);
 
     /// Get the names of required inputs.
-    const std::vector < std::string > & input_names() const {
-      return input_names_;
-    }
+  const std::vector<std::string> & input_names() const
+  {
+    return input_names_;
+  }
 
     /// Get the names of produced outputs.
-    const std::vector < std::string > & output_names() const {
-      return output_names_;
-    }
+  const std::vector<std::string> & output_names() const
+  {
+    return output_names_;
+  }
 
 private:
-    SafetyController(
-      std::unique_ptr < SafetyStrategy > blend_strategy,
-      std::unique_ptr < OutOfDomainDetector > out_of_domain_detector);
+  SafetyController(
+    std::unique_ptr<SafetyStrategy> blend_strategy,
+    std::unique_ptr<OutOfDomainDetector> out_of_domain_detector);
 
-    std::unique_ptr < SafetyStrategy > blend_strategy_;
-    std::unique_ptr < OutOfDomainDetector > out_of_domain_detector_;
-    std::vector < std::string > input_names_;
-    std::vector < std::string > output_names_;
-    int64_t last_timestamp_ns_ = 0;
-  };
+  std::unique_ptr<SafetyStrategy> blend_strategy_;
+  std::unique_ptr<OutOfDomainDetector> out_of_domain_detector_;
+  std::vector<std::string> input_names_;
+  std::vector<std::string> output_names_;
+  int64_t last_timestamp_ns_ = 0;
+};
 
 }  // namespace isaac_deploy_core
