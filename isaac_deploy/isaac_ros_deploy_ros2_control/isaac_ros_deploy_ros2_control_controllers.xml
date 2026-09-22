@@ -49,6 +49,16 @@ SPDX-License-Identifier: Apache-2.0
     </description>
   </class>
 
+  <class name="isaac_ros_deploy_ros2_control/TaskSpaceSafetyController"
+         type="isaac_ros_deploy_ros2_control::controllers::TaskSpaceSafetyController"
+         base_class_type="controller_interface::ChainableControllerInterface">
+    <description>
+      Chainable task-space safety/decoder controller for DisplayPort Cartesian
+      policies. It blends a relative pose action from the current observed pose
+      and writes an absolute Cartesian target to hardware command interfaces.
+    </description>
+  </class>
+
   <class name="isaac_ros_deploy_ros2_control/JointCommandBroadcaster"
          type="isaac_ros_deploy_ros2_control::controllers::JointCommandBroadcaster"
          base_class_type="controller_interface::ControllerInterface">
@@ -57,6 +67,16 @@ SPDX-License-Identifier: Apache-2.0
       as isaac_ros_deploy_interfaces/JointCommand for rosbag recording.
       Reads command values from a chainable controller's reference interfaces
       (exposed as read-only state interfaces).
+    </description>
+  </class>
+
+  <class name="isaac_ros_deploy_ros2_control/JointParameterController"
+         type="isaac_ros_deploy_ros2_control::controllers::JointParameterController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>
+      Per-joint impedance controller with kp, kd, and position_target exposed
+      as ROS 2 parameters (joint.&lt;joint_name&gt;.{kp,kd,position_target}).
+      The velocity and effort feed-forward commands are held at zero.
     </description>
   </class>
 

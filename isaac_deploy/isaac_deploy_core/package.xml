@@ -20,7 +20,7 @@ limitations under the License.
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>isaac_deploy_core</name>
-  <version>4.6.0</version>
+  <version>5.0.0</version>
   <description>Core inference controller libraries for Isaac Deploy</description>
   <maintainer email="isaac-ros-maintainers@nvidia.com">Isaac ROS Maintainers</maintainer>
   <license>Apache-2.0</license>
@@ -30,11 +30,13 @@ limitations under the License.
   <!-- Third-party libraries -->
   <depend>yaml-cpp</depend>
   <depend>nlohmann_json</depend>
-  <depend>tl_expected</depend>
+  <depend condition="$ROS_DISTRO != 'lyrical'">tl_expected</depend>
+  <depend condition="$ROS_DISTRO == 'lyrical'">rcpputils</depend>
   <depend>python3-torch-pip-shim</depend>
   <depend>rclcpp</depend>
   <depend>triton-server</depend>
-  <build_depend>cuda-toolkit</build_depend>
+  <build_depend condition="$ISAAC_ROS_PLATFORM != arm64-fastos">cuda-toolkit-13-2</build_depend>
+  <build_depend condition="$ISAAC_ROS_PLATFORM == arm64-fastos">cuda-toolkit-13-0</build_depend>
 
   <!-- Testing -->
   <test_depend>ament_cmake_gtest</test_depend>

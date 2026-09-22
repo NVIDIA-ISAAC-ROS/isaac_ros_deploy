@@ -44,6 +44,19 @@ SafetyControllerConfig::create_from_yaml(const YAML::Node & yaml)
               "Unknown blend strategy type: " + type_str));
       }
     }
+    if (blend_yaml["reference"]) {
+      const std::string reference_str = blend_yaml["reference"].as<std::string>();
+      if (reference_str == "activation") {
+        config.blend_ratio.reference = BlendReference::kActivation;
+      } else if (reference_str == "current") {
+        config.blend_ratio.reference = BlendReference::kCurrent;
+      } else {
+        return tl::unexpected(
+            make_error(
+              Error::Code::kInvalidArgument,
+              "Unknown blend reference: " + reference_str));
+      }
+    }
     if (blend_yaml["max_velocities"]) {
       config.blend_ratio.max_velocities = blend_yaml["max_velocities"].as<std::vector<
             double>>();
@@ -96,6 +109,7 @@ expected<SafetyController> SafetyController::create(const SafetyControllerConfig
         InterpolateConfig interp_config {
           .max_velocities = config.blend_ratio.max_velocities,
           .default_position = config.blend_ratio.default_position,
+          .reference = config.blend_ratio.reference,
         };
         auto result = Interpolate::create(interp_config);
         if (!result.has_value()) {

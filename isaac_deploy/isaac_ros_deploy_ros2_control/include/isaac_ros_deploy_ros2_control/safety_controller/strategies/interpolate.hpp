@@ -25,6 +25,12 @@
 namespace isaac_deploy_core
 {
 
+enum class BlendReference
+{
+  kActivation,
+  kCurrent,
+};
+
 /// Configuration for Interpolate strategy.
 struct InterpolateConfig
 {
@@ -33,10 +39,14 @@ struct InterpolateConfig
   /// Optional per-joint home pose. NaN = use measured activation pose for that joint.
   /// Must match max_velocities in size when provided.
   std::vector<double> default_position;
+  /// Anchor used for blend_ratio. kActivation anchors blending to the controller activation state;
+  /// kCurrent blends from the measured current position at every control update.
+  BlendReference reference = BlendReference::kActivation;
 };
 
-/// Velocity-limited slew: output = reference + clamp(target - reference, -max_delta, max_delta)
-/// where target = home + blend_ratio * (command - home).
+/// Velocity-limited slew that blends either from the activation/home pose or current pose.
+/// kActivation preserves: target = home + blend_ratio * (command - home).
+/// kCurrent uses: target = current + blend_ratio * (command - current).
 /// INVARIANT: max_velocity is always respected regardless of blend_ratio magnitude or step size.
 class Interpolate : public SafetyStrategy {
 public:
@@ -54,11 +64,12 @@ public:
 private:
   Interpolate(
     torch::Tensor max_velocities, torch::Tensor home_position,
-    torch::Tensor configured_home_mask);
+    torch::Tensor configured_home_mask, BlendReference reference);
 
   torch::Tensor max_velocities_;
   torch::Tensor home_position_;       // NaN-free; valid where configured_home_mask_ is true
   torch::Tensor configured_home_mask_;  // true = joint has YAML-configured home
+  BlendReference reference_;
   torch::Tensor integrated_position_;
   bool integrated_initialized_ = false;
   torch::Tensor activation_position_;  // resolved home: configured or measured at reset()

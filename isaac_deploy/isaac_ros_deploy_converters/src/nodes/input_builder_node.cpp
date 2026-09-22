@@ -54,7 +54,7 @@ InputBuilderNode::InputBuilderNode(const rclcpp::NodeOptions & options)
 {
   initialize_input_converters();
   MessageToTensorConverterRegistry::instance().register_converter(
-    "tensor", "isaac_ros_tensor_list_interfaces/msg/TensorList",
+    "tensor", "isaac_ros_tensor_msgs/msg/TensorList",
     [](const std::string & source) {
       return std::make_shared<TensorListConverter>(source);
     });
@@ -62,9 +62,15 @@ InputBuilderNode::InputBuilderNode(const rclcpp::NodeOptions & options)
   declare_parameter<std::string>("config_path", "");
   declare_parameter<double>("publish_rate", 50.0);
   declare_parameter<std::string>("output_topic", "input_tensors");
+  declare_parameter<std::string>("enable_topic", "");
+  declare_parameter<bool>("enabled_on_start", true);
+  declare_parameter<bool>("reset_feedback_on_enable", true);
+  declare_parameter<std::string>("feedback_reset_topic", "");
 
   config_path_ = get_parameter("config_path").as_string();
   publish_rate_ = get_parameter("publish_rate").as_double();
+  enabled_ = get_parameter("enabled_on_start").as_bool();
+  reset_feedback_on_enable_ = get_parameter("reset_feedback_on_enable").as_bool();
 
   if (config_path_.empty()) {
     throw std::runtime_error("InputBuilderNode: config_path parameter is required");
@@ -174,11 +180,49 @@ void InputBuilderNode::configure()
   // Create single output publisher for the bundled TensorList.
   const auto output_topic = get_parameter("output_topic").as_string();
   output_pub_ =
-    create_publisher<isaac_ros_tensor_list_interfaces::msg::TensorList>(output_topic, 10);
+    create_publisher<isaac_ros_tensor_msgs::msg::TensorList>(output_topic, 10);
   RCLCPP_INFO(get_logger(), "Publishing bundled TensorList on '%s'", output_topic.c_str());
 
-  const auto period = std::chrono::duration<double>(1.0 / publish_rate_);
-  timer_ = create_wall_timer(
+  if (publish_rate_ <= 0.0) {
+    throw std::runtime_error("InputBuilderNode: publish_rate must be positive");
+  }
+
+  const auto enable_topic = get_parameter("enable_topic").as_string();
+  if (!enable_topic.empty()) {
+    enable_sub_ = create_subscription<std_msgs::msg::Bool>(
+      enable_topic, 10,
+      std::bind(&InputBuilderNode::enable_callback, this, std::placeholders::_1));
+    RCLCPP_INFO(
+      get_logger(), "Gating publication on '%s' (enabled_on_start=%s)",
+      enable_topic.c_str(), enabled_ ? "true" : "false");
+  } else {
+    // With no gate topic there is nothing that could ever open the gate, so an
+    // absent gate means always enabled rather than permanently mute.
+    if (!enabled_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Ignoring enabled_on_start=false because enable_topic is empty: with no gate topic "
+        "nothing could ever enable this node. Set enable_topic to gate publication.");
+    }
+    enabled_ = true;
+  }
+
+  const auto feedback_reset_topic = get_parameter("feedback_reset_topic").as_string();
+  if (!feedback_reset_topic.empty()) {
+    feedback_reset_sub_ = create_subscription<std_msgs::msg::Empty>(
+      feedback_reset_topic, 10,
+      [this](const std_msgs::msg::Empty::SharedPtr) {
+        reset_feedback("reset requested on the feedback reset topic");
+      });
+    RCLCPP_INFO(
+      get_logger(), "Listening for feedback resets on '%s'", feedback_reset_topic.c_str());
+  }
+
+  const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    std::chrono::duration<double>(1.0 / publish_rate_));
+  timer_ = rclcpp::create_timer(
+    this,
+    get_clock(),
     period,
     std::bind(&InputBuilderNode::timer_callback, this));
 
@@ -279,6 +323,10 @@ void InputBuilderNode::create_subscription_groups(
 
   // Create subscriptions for each group.
   for (auto & [topic, group] : groups) {
+    group->has_initial_values = std::all_of(
+      group->converters.begin(), group->converters.end(),
+      [](const auto & entry) {return entry.initial_value.has_value();});
+
     auto callback = [this, grp = group.get()](std::shared_ptr<rclcpp::SerializedMessage> msg) {
         std::lock_guard<std::mutex> lock(grp->mutex);
         grp->latest_msg = msg;
@@ -318,10 +366,7 @@ void InputBuilderNode::timer_callback()
     }
 
     if (!msg) {
-      const bool has_initial = std::all_of(
-        group->converters.begin(), group->converters.end(),
-        [](const auto & e) {return e.initial_value.has_value();});
-      if (has_initial) {
+      if (group->has_initial_values) {
         for (const auto & entry : group->converters) {
           all_converted[entry.source] = *entry.initial_value;
         }
@@ -331,8 +376,19 @@ void InputBuilderNode::timer_callback()
       continue;
     }
 
-    for (const auto & entry : group->converters) {
-      all_converted[entry.source] = entry.converter->convert(msg);
+    // convert() throws on a malformed payload, for example a TensorList whose
+    // names and tensors disagree. Letting that escape this timer callback
+    // unwinds the executor and takes the node down, so drop the cycle instead.
+    try {
+      for (const auto & entry : group->converters) {
+        all_converted[entry.source] = entry.converter->convert(msg);
+      }
+    } catch (const std::exception & exc) {
+      RCLCPP_ERROR_THROTTLE(
+        get_logger(), *get_clock(), 1000,
+        "Skipping model input publication, could not convert a message on '%s': %s",
+        group->topic.c_str(), exc.what());
+      return;
     }
   }
 
@@ -344,10 +400,7 @@ void InputBuilderNode::timer_callback()
           continue;
         }
         // Skip groups with initial values (e.g., feedback) — they don't block activation.
-        const bool has_initial = std::all_of(
-          group->converters.begin(), group->converters.end(),
-          [](const auto & e) {return e.initial_value.has_value();});
-        if (has_initial) {
+        if (group->has_initial_values) {
           continue;
         }
         if (group->subscription->get_publisher_count() == 0) {
@@ -407,6 +460,13 @@ void InputBuilderNode::timer_callback()
     return;
   }
 
+  if (!enabled_) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "Not publishing model inputs because the enable gate is closed");
+    return;
+  }
+
   validate_input_synchronization(current_stamp);
 
   // Update builder_inputs_ with latest converted tensors (positionally aligned).
@@ -426,14 +486,51 @@ void InputBuilderNode::timer_callback()
   }
 
   // Build a single TensorList with all model inputs.
-  isaac_ros_tensor_list_interfaces::msg::TensorList msg;
+  isaac_ros_tensor_msgs::msg::TensorList msg;
   msg.header.stamp = current_stamp;
 
   for (const auto & [name, tensor] : nn_inputs_) {
-    msg.tensors.push_back(torch_to_tensor_msg(tensor, name));
+    msg.names.push_back(name);
+    msg.tensors.push_back(torch_to_tensor_msg(tensor));
   }
 
   output_pub_->publish(msg);
+}
+
+void InputBuilderNode::reset_feedback(const std::string & reason)
+{
+  size_t reset_groups = 0;
+  for (auto & group : subscription_groups_) {
+    if (!group->has_initial_values) {
+      continue;
+    }
+    std::lock_guard<std::mutex> lock(group->mutex);
+    if (group->latest_msg) {
+      group->latest_msg.reset();
+      ++reset_groups;
+    }
+  }
+  if (reset_groups > 0) {
+    RCLCPP_INFO(
+      get_logger(), "Restored the exported initial feedback tensors: %s", reason.c_str());
+  }
+}
+
+void InputBuilderNode::enable_callback(const std_msgs::msg::Bool::SharedPtr msg)
+{
+  const bool enabled = msg->data;
+  if (enabled == enabled_) {
+    return;
+  }
+  enabled_ = enabled;
+  if (enabled_) {
+    if (reset_feedback_on_enable_) {
+      reset_feedback("enable gate rising edge");
+    }
+    RCLCPP_INFO(get_logger(), "Model input publication enabled");
+  } else {
+    RCLCPP_INFO(get_logger(), "Model input publication disabled");
+  }
 }
 
 void InputBuilderNode::validate_input_synchronization(const rclcpp::Time & current_time)

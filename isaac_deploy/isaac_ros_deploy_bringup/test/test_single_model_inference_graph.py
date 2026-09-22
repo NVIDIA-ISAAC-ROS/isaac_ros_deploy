@@ -57,57 +57,57 @@ def generate_test_description():
             instead of asserting. Useful for debugging with rqt_graph.
     """
     # Get paths
-    pkg_dir = Path(get_package_share_directory("isaac_ros_deploy_bringup"))
-    test_dir = pkg_dir / "test"
-    data_dir = test_dir / "data"
-    scripts_dir = test_dir / "scripts"
+    pkg_dir = Path(get_package_share_directory('isaac_ros_deploy_bringup'))
+    test_dir = pkg_dir / 'test'
+    data_dir = test_dir / 'data'
+    scripts_dir = test_dir / 'scripts'
 
     # Generate model in a writable temp dir (runfiles are read-only on remote
     # execution).  Copy the YAML config alongside the model so that its
     # relative model_path resolves correctly.
     tmp_dir = Path(tempfile.mkdtemp())
-    model_path = str(tmp_dir / "passthrough_model.onnx")
+    model_path = str(tmp_dir / 'passthrough_model.onnx')
 
-    create_script = scripts_dir / "create_passthrough_model.py"
+    create_script = scripts_dir / 'create_passthrough_model.py'
     subprocess.run(
-        [sys.executable, str(create_script), "-o", model_path],
+        [sys.executable, str(create_script), '-o', model_path],
         check=True,
     )
 
-    shutil.copy(data_dir / "single_model_inference_graph.yaml", tmp_dir)
-    config_path = str(tmp_dir / "single_model_inference_graph.yaml")
+    shutil.copy(data_dir / 'single_model_inference_graph.yaml', tmp_dir)
+    config_path = str(tmp_dir / 'single_model_inference_graph.yaml')
 
     # Include the reusable inference pipeline launch file.
-    launch_file = str(pkg_dir / "launch" / "inference_graph.launch.py")
+    launch_file = str(pkg_dir / 'launch' / 'inference_graph.launch.py')
     # Map sources (kind values) to topics: joint position/velocity come from
     # joint_states, body rotation/angular_velocity come from imu.
     source_to_topic = (
-        "state/joint/position:joint_states,"
-        "state/joint/velocity:joint_states,"
-        "state/body/rotation:imu,"
-        "state/body/angular_velocity:imu"
+        'state/joint/position:joint_states,'
+        'state/joint/velocity:joint_states,'
+        'state/body/rotation:imu,'
+        'state/body/angular_velocity:imu'
     )
     output_to_topic = (
-        "joint_pos_targets:joint_commands,"
-        "joint_vel_targets:joint_commands,"
-        "body_rot_target:body_commands,"
-        "body_ang_vel_target:body_commands"
+        'joint_pos_targets:joint_commands,'
+        'joint_vel_targets:joint_commands,'
+        'body_rot_target:body_commands,'
+        'body_ang_vel_target:body_commands'
     )
 
     pipeline = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(launch_file),
         launch_arguments={
-            "config_path": config_path,
-            "publish_rate": "50.0",
-            "source_to_topic": source_to_topic,
-            "output_to_topic": output_to_topic,
+            'config_path': config_path,
+            'publish_rate': '50.0',
+            'source_to_topic': source_to_topic,
+            'output_to_topic': output_to_topic,
         }.items(),
     )
 
     run_forever_arg = DeclareLaunchArgument(
-        "run_forever",
-        default_value="false",
-        description="If true, spin forever instead of running assertions.",
+        'run_forever',
+        default_value='false',
+        description='If true, spin forever instead of running assertions.',
     )
 
     return (
@@ -115,8 +115,8 @@ def generate_test_description():
             [
                 run_forever_arg,
                 SetEnvironmentVariable(
-                    "_LAUNCH_TEST_RUN_FOREVER",
-                    LaunchConfiguration("run_forever"),
+                    '_LAUNCH_TEST_RUN_FOREVER',
+                    LaunchConfiguration('run_forever'),
                 ),
                 pipeline,
                 launch_testing.actions.ReadyToTest(),
@@ -141,28 +141,28 @@ class TestInferenceGraph(unittest.TestCase):
 
     def setUp(self):
         """Set up test node."""
-        self.node = rclpy.create_node("test_inference_graph")
+        self.node = rclpy.create_node('test_inference_graph')
         self.received_joint_commands = []
         self.received_body_commands = []
 
         # Publishers — topics are in the inference_graph namespace.
         self.joint_state_pub = self.node.create_publisher(
-            JointState, "/inference_graph/joint_states", 10
+            JointState, '/inference_graph/joint_states', 10
         )
         self.imu_pub = self.node.create_publisher(
-            Imu, "/inference_graph/imu", 10
+            Imu, '/inference_graph/imu', 10
         )
 
         # Subscribers — output topics are also in the namespace.
         self.joint_command_sub = self.node.create_subscription(
             JointCommand,
-            "/inference_graph/joint_commands",
+            '/inference_graph/joint_commands',
             self._joint_command_callback,
             10,
         )
         self.body_command_sub = self.node.create_subscription(
             BodyCommand,
-            "/inference_graph/body_commands",
+            '/inference_graph/body_commands',
             self._body_command_callback,
             10,
         )
@@ -200,7 +200,7 @@ class TestInferenceGraph(unittest.TestCase):
     def _publish_inputs(self):
         """Publish JointState and Imu test inputs."""
         joint_state = JointState()
-        joint_state.name = ["joint_3", "joint_2", "joint_1"]
+        joint_state.name = ['joint_3', 'joint_2', 'joint_1']
         joint_state.position = [1.0, 2.0, 3.0]
         joint_state.velocity = [4.0, 5.0, 6.0]
 
@@ -223,7 +223,7 @@ class TestInferenceGraph(unittest.TestCase):
         """Test that all inputs pass through correctly to outputs."""
         # Wait for pipeline output publishers to be available.
         self.assertTrue(
-            self._wait_for_topic_publishers("/inference_graph/joint_commands"),
+            self._wait_for_topic_publishers('/inference_graph/joint_commands'),
             "Pipeline output topic '/inference_graph/joint_commands' has no publishers",
         )
 
@@ -232,9 +232,9 @@ class TestInferenceGraph(unittest.TestCase):
         # only one message needs to get through.
         publish_timer = self.node.create_timer(0.1, self._publish_inputs)
 
-        if os.environ.get("_LAUNCH_TEST_RUN_FOREVER", "false") == "true":
-            print("Running in interactive mode (run_forever:=true). "
-                  "Press Ctrl+C to stop.")
+        if os.environ.get('_LAUNCH_TEST_RUN_FOREVER', 'false') == 'true':
+            print('Running in interactive mode (run_forever:=true). '
+                  'Press Ctrl+C to stop.')
             while rclpy.ok():
                 rclpy.spin_once(self.node, timeout_sec=1.0)
             return
@@ -245,7 +245,7 @@ class TestInferenceGraph(unittest.TestCase):
             self._spin_until_condition(
                 lambda: len(self.received_joint_commands) > 0
             ),
-            "Did not receive any JointCommand messages",
+            'Did not receive any JointCommand messages',
         )
 
         cmd = self.received_joint_commands[-1]
@@ -253,8 +253,8 @@ class TestInferenceGraph(unittest.TestCase):
         # Output should be in NN order: [joint_1, joint_2, joint_3]
         self.assertEqual(
             list(cmd.names),
-            ["joint_1", "joint_2", "joint_3"],
-            f"Expected names [joint_1, joint_2, joint_3], got {cmd.names}",
+            ['joint_1', 'joint_2', 'joint_3'],
+            f'Expected names [joint_1, joint_2, joint_3], got {cmd.names}',
         )
 
         # After reordering to NN order and passthrough:
@@ -267,7 +267,7 @@ class TestInferenceGraph(unittest.TestCase):
                 actual,
                 expected,
                 places=5,
-                msg=f"Position[{i}]: expected {expected}, got {actual}",
+                msg=f'Position[{i}]: expected {expected}, got {actual}',
             )
 
         # velocity: joint_1=6, joint_2=5, joint_3=4 -> [6, 5, 4]
@@ -279,7 +279,7 @@ class TestInferenceGraph(unittest.TestCase):
                 actual,
                 expected,
                 places=5,
-                msg=f"Velocity[{i}]: expected {expected}, got {actual}",
+                msg=f'Velocity[{i}]: expected {expected}, got {actual}',
             )
 
         # --- Verify BodyCommand output ---
@@ -288,7 +288,7 @@ class TestInferenceGraph(unittest.TestCase):
             self._spin_until_condition(
                 lambda: len(self.received_body_commands) > 0
             ),
-            "Did not receive any BodyCommand messages",
+            'Did not receive any BodyCommand messages',
         )
 
         body_cmd = self.received_body_commands[-1]
@@ -296,16 +296,16 @@ class TestInferenceGraph(unittest.TestCase):
         # Body rotation should pass through unchanged
         self.assertEqual(len(body_cmd.pose), 1)
         orient = body_cmd.pose[0].orientation
-        self.assertAlmostEqual(orient.x, 0.1, places=5, msg="orient.x")
-        self.assertAlmostEqual(orient.y, 0.2, places=5, msg="orient.y")
-        self.assertAlmostEqual(orient.z, 0.3, places=5, msg="orient.z")
-        self.assertAlmostEqual(orient.w, 0.4, places=5, msg="orient.w")
+        self.assertAlmostEqual(orient.x, 0.1, places=5, msg='orient.x')
+        self.assertAlmostEqual(orient.y, 0.2, places=5, msg='orient.y')
+        self.assertAlmostEqual(orient.z, 0.3, places=5, msg='orient.z')
+        self.assertAlmostEqual(orient.w, 0.4, places=5, msg='orient.w')
 
         # Body angular velocity should pass through unchanged
         self.assertEqual(len(body_cmd.twist), 1)
         ang_vel = body_cmd.twist[0].angular
-        self.assertAlmostEqual(ang_vel.x, 1.0, places=5, msg="ang_vel.x")
-        self.assertAlmostEqual(ang_vel.y, 2.0, places=5, msg="ang_vel.y")
-        self.assertAlmostEqual(ang_vel.z, 3.0, places=5, msg="ang_vel.z")
+        self.assertAlmostEqual(ang_vel.x, 1.0, places=5, msg='ang_vel.x')
+        self.assertAlmostEqual(ang_vel.y, 2.0, places=5, msg='ang_vel.y')
+        self.assertAlmostEqual(ang_vel.z, 3.0, places=5, msg='ang_vel.z')
 
         publish_timer.cancel()

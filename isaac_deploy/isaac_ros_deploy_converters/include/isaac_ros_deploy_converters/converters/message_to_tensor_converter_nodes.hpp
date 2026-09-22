@@ -19,10 +19,11 @@
 #include "isaac_ros_deploy_converters/converters/message_to_tensor_converter.hpp"
 
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
-#include "isaac_ros_tensor_list_interfaces/msg/tensor_list.hpp"
+#include "isaac_ros_tensor_msgs/msg/tensor_list.hpp"
 #include "isaac_ros_deploy_converters/utils/tensor_list_utils.hpp"
 #include "rclcpp/serialization.hpp"
 
@@ -43,18 +44,21 @@ public:
   std::string get_kind() const override {return "feedback";}
   std::string get_message_type() const override
   {
-    return "isaac_ros_tensor_list_interfaces/msg/TensorList";
+    return "isaac_ros_tensor_msgs/msg/TensorList";
   }
 
   torch::Tensor convert(const std::shared_ptr<rclcpp::SerializedMessage> & msg) override
   {
-    isaac_ros_tensor_list_interfaces::msg::TensorList tensor_list;
-    rclcpp::Serialization<isaac_ros_tensor_list_interfaces::msg::TensorList> serializer;
+    isaac_ros_tensor_msgs::msg::TensorList tensor_list;
+    rclcpp::Serialization<isaac_ros_tensor_msgs::msg::TensorList> serializer;
     serializer.deserialize_message(msg.get(), &tensor_list);
 
-    for (const auto & tensor_msg : tensor_list.tensors) {
-      if (tensor_msg.name == tensor_name_) {
-        return tensor_msg_to_torch(tensor_msg);
+    if (tensor_list.names.size() != tensor_list.tensors.size()) {
+      throw std::runtime_error("TensorList names and tensors must have the same length");
+    }
+    for (size_t i = 0; i < tensor_list.names.size(); ++i) {
+      if (tensor_list.names[i] == tensor_name_) {
+        return tensor_msg_to_torch(tensor_list.tensors[i]);
       }
     }
     return torch::empty({});

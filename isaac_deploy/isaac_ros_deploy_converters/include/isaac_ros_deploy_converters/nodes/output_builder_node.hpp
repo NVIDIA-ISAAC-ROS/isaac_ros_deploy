@@ -23,7 +23,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 
-#include "isaac_ros_tensor_list_interfaces/msg/tensor_list.hpp"
+#include "isaac_ros_tensor_msgs/msg/tensor_list.hpp"
 
 #include "isaac_deploy_core/inference_controller/output/output_builder.hpp"
 
@@ -78,8 +78,12 @@ private:
   /// Load configuration and create publishers.
   void configure();
 
+  /// Extract tensors whose names match configured outputs.
+  isaac_deploy_core::TensorDict extract_expected_tensors(
+    const isaac_ros_tensor_msgs::msg::TensorList & msg) const;
+
   /// Handle incoming TensorList from the inference node.
-  void on_tensor_list(const isaac_ros_tensor_list_interfaces::msg::TensorList::SharedPtr msg);
+  void on_tensor_list(const isaac_ros_tensor_msgs::msg::TensorList::SharedPtr msg);
 
   /// Create publication groups from OutputBuilder metadata.
   void create_publication_groups();
@@ -94,7 +98,7 @@ private:
   std::vector<std::unique_ptr<PublicationGroup>> publication_groups_;
 
   /// Subscription for the input TensorList.
-  rclcpp::Subscription<isaac_ros_tensor_list_interfaces::msg::TensorList>::SharedPtr input_sub_;
+  rclcpp::Subscription<isaac_ros_tensor_msgs::msg::TensorList>::SharedPtr input_sub_;
 
   /// Output tensors for OutputBuilder.
   std::vector<isaac_deploy_core::NamedTensor> outputs_;

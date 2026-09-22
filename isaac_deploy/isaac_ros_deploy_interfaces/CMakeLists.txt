@@ -27,17 +27,13 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BodyCommand.msg"
+  "msg/CartesianPoseDeltaCommand.msg"
   "msg/JointCommand.msg"
   "msg/JointCommandTrajectory.msg"
   "msg/ReferenceMotionState.msg"
   DEPENDENCIES std_msgs geometry_msgs builtin_interfaces
 )
 
-ament_export_dependencies(
-  rosidl_default_runtime
-  std_msgs
-  geometry_msgs
-  builtin_interfaces
-)
+ament_export_dependencies(rosidl_default_runtime)
 
 ament_package()

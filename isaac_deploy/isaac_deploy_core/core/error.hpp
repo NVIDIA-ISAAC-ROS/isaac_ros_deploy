@@ -20,7 +20,12 @@
 #include <string_view>
 #include <utility>
 
+// Lyrical provides tl::expected through rcpputils instead of a standalone package.
+#if defined(ISAAC_DEPLOY_USE_BUNDLED_TL_EXPECTED) || !__has_include("tl_expected/expected.hpp")
+#include "rcpputils/tl_expected/expected.hpp"
+#else
 #include "tl_expected/expected.hpp"
+#endif
 
 namespace isaac_deploy_core
 {

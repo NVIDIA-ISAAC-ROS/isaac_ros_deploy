@@ -16,7 +16,10 @@
 
 #include "isaac_ros_deploy_converters/converters/message_to_tensor_converter.hpp"
 
+#include <array>
+#include <cmath>
 #include <mutex>
+#include <vector>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
@@ -35,6 +38,50 @@ namespace isaac_ros_deploy_converters
 
 namespace
 {
+
+constexpr std::array<const char *, 6> kRotation6DNames{
+  "r00", "r01", "r02", "r10", "r11", "r12"};
+
+std::array<double, 4> normalize_quat_xyzw(double x, double y, double z, double w)
+{
+  const double norm = std::sqrt(x * x + y * y + z * z + w * w);
+  if (norm <= 0.0 || !std::isfinite(norm)) {
+    return {0.0, 0.0, 0.0, 1.0};
+  }
+  return {x / norm, y / norm, z / norm, w / norm};
+}
+
+std::array<float, 6> quat_xyzw_to_rot6d_rows(double x, double y, double z, double w)
+{
+  const auto q = normalize_quat_xyzw(x, y, z, w);
+  x = q[0];
+  y = q[1];
+  z = q[2];
+  w = q[3];
+  const double xx = x * x;
+  const double yy = y * y;
+  const double zz = z * z;
+  const double xy = x * y;
+  const double xz = x * z;
+  const double yz = y * z;
+  const double wx = w * x;
+  const double wy = w * y;
+  const double wz = w * z;
+  return {
+    static_cast<float>(1.0 - 2.0 * (yy + zz)),
+    static_cast<float>(2.0 * (xy - wz)),
+    static_cast<float>(2.0 * (xz + wy)),
+    static_cast<float>(2.0 * (xy + wz)),
+    static_cast<float>(1.0 - 2.0 * (xx + zz)),
+    static_cast<float>(2.0 * (yz - wx)),
+  };
+}
+
+isaac_deploy_core::TensorSpec rotation_6d_tensor_spec()
+{
+  return {.names = {{}, std::vector<std::string>(
+      kRotation6DNames.begin(), kRotation6DNames.end())}};
+}
 
 // ============================================================================
 // Shared deserialization helpers
@@ -234,6 +281,31 @@ public:
   isaac_deploy_core::TensorSpec get_tensor_spec() const override
   {
     return {.names = {{}, {"qx", "qy", "qz", "qw"}}};
+  }
+};
+
+class PoseStampedRotation6DConverter : public MessageToTensorConverter
+{
+public:
+  std::string get_kind() const override {return "state/body/rotation_6d";}
+  std::string get_message_type() const override {return "geometry_msgs/msg/PoseStamped";}
+
+  torch::Tensor convert(const std::shared_ptr<rclcpp::SerializedMessage> & msg) override
+  {
+    geometry_msgs::msg::PoseStamped pose_stamped;
+    rclcpp::Serialization<geometry_msgs::msg::PoseStamped> serializer;
+    serializer.deserialize_message(msg.get(), &pose_stamped);
+
+    const auto & ori = pose_stamped.pose.orientation;
+    const auto rot6d = quat_xyzw_to_rot6d_rows(ori.x, ori.y, ori.z, ori.w);
+    return torch::tensor(
+      {{rot6d[0], rot6d[1], rot6d[2], rot6d[3], rot6d[4], rot6d[5]}},
+      torch::kFloat32);
+  }
+
+  isaac_deploy_core::TensorSpec get_tensor_spec() const override
+  {
+    return rotation_6d_tensor_spec();
   }
 };
 
@@ -599,6 +671,11 @@ void initialize_input_converters()
         "state/body/rotation", "geometry_msgs/msg/PoseStamped",
         [](const std::string &) {
           return std::make_shared<PoseStampedRotationConverter>();
+        });
+      registry.register_converter(
+        "state/body/rotation_6d", "geometry_msgs/msg/PoseStamped",
+        [](const std::string &) {
+          return std::make_shared<PoseStampedRotation6DConverter>();
         });
       registry.register_converter(
         "state/body/angular_velocity", "sensor_msgs/msg/Imu",

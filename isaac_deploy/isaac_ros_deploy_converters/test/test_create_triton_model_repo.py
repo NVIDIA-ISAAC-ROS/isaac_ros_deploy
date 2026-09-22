@@ -153,8 +153,8 @@ def test_feedback_flow_contributes_to_ensemble_io(tmp_path, monkeypatch):
     assert result.output_tensor_names == ["feedback_out", "action"]
 
 
-def test_model_config_can_pin_model_to_cpu():
-    """Runtime CPU placement should generate a Triton CPU instance group."""
+def test_model_config_pins_model_to_requested_device():
+    """Generated configs should not let Triton spread across visible GPUs."""
     config = repo._generate_model_config(
         "policy",
         inputs=[{"name": "state", "dtype": "float32", "shape": [1, 3]}],
@@ -172,7 +172,7 @@ def test_model_config_can_pin_model_to_cpu():
         dynamic_batch=False,
     )
 
-    assert "instance_group" not in default_config
+    assert "instance_group [{ kind: KIND_GPU gpus: [0] }]" in default_config
 
 
 def test_cpu_models_are_runtime_options(tmp_path, monkeypatch):
@@ -259,6 +259,96 @@ def test_missing_backend_is_rejected_with_clear_message(tmp_path, monkeypatch):
         repo.create_triton_model_repo(config_path, tmp_path / "repo")
 
     assert not called
+
+
+def test_external_onnx_data_is_materialized_inside_model_directory(
+    tmp_path, monkeypatch
+):
+    """ONNX artifacts must be zero-copy files inside the Triton model dir."""
+    config = _single_model_config()
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(config_path, config)
+    source_model = tmp_path / "policy.onnx"
+    source_data = tmp_path / "policy.onnx.data"
+    source_model.write_bytes(b"model")
+    source_data.write_bytes(b"external weights")
+    monkeypatch.setattr(repo, "_has_dynamic_batch", lambda _: False)
+
+    repo._create_model_dir(
+        config_path,
+        "policy",
+        tmp_path / "repo",
+        config,
+    )
+
+    version_dir = tmp_path / "repo" / "policy" / "1"
+    linked_model = version_dir / "model.onnx"
+    linked_data = version_dir / "policy.onnx.data"
+    assert linked_model.is_symlink()
+    assert linked_data.is_symlink()
+    assert linked_model.resolve() == source_model.resolve()
+    assert linked_data.resolve() == source_data.resolve()
+
+
+def test_onnx_artifacts_are_never_copied_when_symlink_fails(
+    tmp_path, monkeypatch
+):
+    """ONNX artifacts must not fall back to an expensive copy."""
+    config = _single_model_config()
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(config_path, config)
+    (tmp_path / "policy.onnx").write_bytes(b"model")
+    (tmp_path / "policy.onnx.data").write_bytes(b"external weights")
+    monkeypatch.setattr(repo, "_has_dynamic_batch", lambda _: False)
+
+    def _cannot_symlink(_self, _target):
+        raise OSError("symlinks unavailable")
+
+    monkeypatch.setattr(Path, "symlink_to", _cannot_symlink)
+
+    with pytest.raises(RuntimeError, match=r"symlink ONNX artifact"):
+        repo._create_model_dir(
+            config_path,
+            "policy",
+            tmp_path / "repo",
+            config,
+        )
+
+
+def test_external_data_is_found_next_to_symlinked_model_artifact(
+    tmp_path, monkeypatch
+):
+    """A Bazel symlink assembly must retain sibling external-data discovery."""
+    config = _single_model_config()
+    asset_dir = tmp_path / "assets"
+    asset_dir.mkdir()
+    config_path = asset_dir / "config.yaml"
+    _write_yaml(config_path, config)
+
+    model_source = tmp_path / "model_source" / "policy.onnx"
+    data_source = tmp_path / "data_source" / "policy.onnx.data"
+    model_source.parent.mkdir()
+    data_source.parent.mkdir()
+    model_source.write_bytes(b"model")
+    data_source.write_bytes(b"external weights")
+    (asset_dir / "policy.onnx").symlink_to(model_source)
+    (asset_dir / "policy.onnx.data").symlink_to(data_source)
+    monkeypatch.setattr(repo, "_has_dynamic_batch", lambda _: False)
+
+    repo._create_model_dir(
+        config_path,
+        "policy",
+        tmp_path / "repo",
+        config,
+    )
+
+    version_dir = tmp_path / "repo" / "policy" / "1"
+    linked_model = version_dir / "model.onnx"
+    linked_data = version_dir / "policy.onnx.data"
+    assert linked_model.is_symlink()
+    assert linked_data.is_symlink()
+    assert linked_model.resolve() == model_source.resolve()
+    assert linked_data.resolve() == data_source.resolve()
 
 
 def test_multi_model_data_flow_uses_internal_tensor_names(tmp_path, monkeypatch):

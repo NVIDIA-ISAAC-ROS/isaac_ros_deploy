@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -25,7 +26,10 @@
 
 #include "rclcpp/rclcpp.hpp"
 
-#include "isaac_ros_tensor_list_interfaces/msg/tensor_list.hpp"
+#include "std_msgs/msg/bool.hpp"
+#include "std_msgs/msg/empty.hpp"
+
+#include "isaac_ros_tensor_msgs/msg/tensor_list.hpp"
 
 #include "isaac_deploy_core/inference_controller/input/input_builder.hpp"
 
@@ -63,6 +67,9 @@ struct SubscriptionGroup
   rclcpp::Time receive_time{0, 0, RCL_ROS_TIME};
   /// Mutex for thread-safe access.
   std::mutex mutex;
+  /// True when every converter in the group has an initial value, i.e. the group
+  /// is a feedback group that does not block activation and can be reset.
+  bool has_initial_values{false};
 };
 
 /// ROS 2 node that converts ROS messages to tensors and builds neural network inputs.
@@ -80,6 +87,12 @@ struct SubscriptionGroup
 /// - source_to_topic.<source>: ROS topic to subscribe to for a given source
 ///   (defaults to the source name itself)
 /// - output_topic: Topic name for the output TensorList (default: "input_tensors")
+/// - enable_topic: std_msgs/Bool topic gating publication (default: "", always on)
+/// - enabled_on_start: initial gate state when enable_topic is set (default: true)
+/// - reset_feedback_on_enable: restore the exported initial feedback tensors on the
+///   gate's rising edge (default: true)
+/// - feedback_reset_topic: std_msgs/Empty topic that restores the exported initial
+///   feedback tensors on demand (default: "", disabled)
 class InputBuilderNode : public rclcpp::Node
 {
 public:
@@ -100,6 +113,16 @@ private:
   /// Check if input timestamps are synchronized and warn if not.
   void validate_input_synchronization(const rclcpp::Time & current_time);
 
+  /// Drop cached feedback messages so the next tick reuses the exported initial values.
+  ///
+  /// A recurrent policy is trained from its exported initial state at the start of
+  /// every episode, so carrying hidden state across trials feeds it history it never
+  /// saw in training.
+  void reset_feedback(const std::string & reason);
+
+  /// Handle a change of the enable gate.
+  void enable_callback(const std_msgs::msg::Bool::SharedPtr msg);
+
   /// Path to configuration file.
   std::string config_path_;
 
@@ -116,7 +139,16 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
 
   /// Single output publisher for the bundled TensorList.
-  rclcpp::Publisher<isaac_ros_tensor_list_interfaces::msg::TensorList>::SharedPtr output_pub_;
+  rclcpp::Publisher<isaac_ros_tensor_msgs::msg::TensorList>::SharedPtr output_pub_;
+
+  /// Whether the enable gate currently allows publishing.
+  std::atomic_bool enabled_{true};
+
+  /// Whether a rising edge of the enable gate resets feedback tensors.
+  bool reset_feedback_on_enable_{true};
+
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr enable_sub_;
+  rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr feedback_reset_sub_;
 
   /// Pre-allocated input vector for InputBuilder (positionally aligned with activate).
   std::vector<isaac_deploy_core::NamedTensor> builder_inputs_;

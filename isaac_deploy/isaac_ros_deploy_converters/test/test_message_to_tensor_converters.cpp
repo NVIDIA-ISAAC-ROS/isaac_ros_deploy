@@ -15,6 +15,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
@@ -76,6 +78,15 @@ TEST_F(MessageToTensorConverterTest, ExplicitPoseStampedRotationSelection)
   auto & registry = MessageToTensorConverterRegistry::instance();
   const auto converter = registry.create_for_kind(
     "state/body/rotation", {}, "geometry_msgs/msg/PoseStamped");
+  ASSERT_NE(converter, nullptr);
+  EXPECT_EQ(converter->get_message_type(), "geometry_msgs/msg/PoseStamped");
+}
+
+TEST_F(MessageToTensorConverterTest, ExplicitPoseStampedRotation6DSelection)
+{
+  auto & registry = MessageToTensorConverterRegistry::instance();
+  const auto converter = registry.create_for_kind(
+    "state/body/rotation_6d", {}, "geometry_msgs/msg/PoseStamped");
   ASSERT_NE(converter, nullptr);
   EXPECT_EQ(converter->get_message_type(), "geometry_msgs/msg/PoseStamped");
 }
@@ -202,6 +213,82 @@ TEST_F(MessageToTensorConverterTest, PoseStampedRotationConverterOutput)
 
   const auto spec = converter->get_tensor_spec();
   EXPECT_EQ(spec.names, (std::vector<std::vector<std::string>>{{}, {"qx", "qy", "qz", "qw"}}));
+}
+
+TEST_F(MessageToTensorConverterTest, PoseStampedRotationConverterPreservesNegativeW)
+{
+  auto & registry = MessageToTensorConverterRegistry::instance();
+  const auto converter = registry.create_for_kind(
+    "state/body/rotation", {}, "geometry_msgs/msg/PoseStamped");
+
+  geometry_msgs::msg::PoseStamped pose_stamped;
+  pose_stamped.pose.orientation.x = 0.1;
+  pose_stamped.pose.orientation.y = -0.2;
+  pose_stamped.pose.orientation.z = 0.3;
+  pose_stamped.pose.orientation.w = -0.9;
+
+  const auto tensor = converter->convert(serialize(pose_stamped));
+  ASSERT_EQ(tensor.sizes(), (std::vector<int64_t>{1, 4}));
+
+  const auto accessor = tensor.accessor<float, 2>();
+  EXPECT_FLOAT_EQ(accessor[0][0], 0.1f);
+  EXPECT_FLOAT_EQ(accessor[0][1], -0.2f);
+  EXPECT_FLOAT_EQ(accessor[0][2], 0.3f);
+  EXPECT_FLOAT_EQ(accessor[0][3], -0.9f);
+}
+
+TEST_F(MessageToTensorConverterTest, PoseStampedRotation6DIdentityOutput)
+{
+  auto & registry = MessageToTensorConverterRegistry::instance();
+  const auto converter = registry.create_for_kind(
+    "state/body/rotation_6d", {}, "geometry_msgs/msg/PoseStamped");
+
+  geometry_msgs::msg::PoseStamped pose_stamped;
+  pose_stamped.pose.orientation.x = 0.0;
+  pose_stamped.pose.orientation.y = 0.0;
+  pose_stamped.pose.orientation.z = 0.0;
+  pose_stamped.pose.orientation.w = 1.0;
+
+  const auto tensor = converter->convert(serialize(pose_stamped));
+  ASSERT_EQ(tensor.sizes(), (std::vector<int64_t>{1, 6}));
+
+  const auto accessor = tensor.accessor<float, 2>();
+  EXPECT_FLOAT_EQ(accessor[0][0], 1.0f);
+  EXPECT_FLOAT_EQ(accessor[0][1], 0.0f);
+  EXPECT_FLOAT_EQ(accessor[0][2], 0.0f);
+  EXPECT_FLOAT_EQ(accessor[0][3], 0.0f);
+  EXPECT_FLOAT_EQ(accessor[0][4], 1.0f);
+  EXPECT_FLOAT_EQ(accessor[0][5], 0.0f);
+
+  const auto spec = converter->get_tensor_spec();
+  EXPECT_EQ(
+    spec.names,
+    (std::vector<std::vector<std::string>>{
+      {}, {"r00", "r01", "r02", "r10", "r11", "r12"}}));
+}
+
+TEST_F(MessageToTensorConverterTest, PoseStampedRotation6DYaw90Output)
+{
+  auto & registry = MessageToTensorConverterRegistry::instance();
+  const auto converter = registry.create_for_kind(
+    "state/body/rotation_6d", {}, "geometry_msgs/msg/PoseStamped");
+
+  geometry_msgs::msg::PoseStamped pose_stamped;
+  pose_stamped.pose.orientation.x = 0.0;
+  pose_stamped.pose.orientation.y = 0.0;
+  pose_stamped.pose.orientation.z = std::sqrt(0.5);
+  pose_stamped.pose.orientation.w = std::sqrt(0.5);
+
+  const auto tensor = converter->convert(serialize(pose_stamped));
+  ASSERT_EQ(tensor.sizes(), (std::vector<int64_t>{1, 6}));
+
+  const auto accessor = tensor.accessor<float, 2>();
+  EXPECT_NEAR(accessor[0][0], 0.0f, 1e-6f);
+  EXPECT_NEAR(accessor[0][1], -1.0f, 1e-6f);
+  EXPECT_NEAR(accessor[0][2], 0.0f, 1e-6f);
+  EXPECT_NEAR(accessor[0][3], 1.0f, 1e-6f);
+  EXPECT_NEAR(accessor[0][4], 0.0f, 1e-6f);
+  EXPECT_NEAR(accessor[0][5], 0.0f, 1e-6f);
 }
 
 TEST_F(MessageToTensorConverterTest, BothConvertersProduceSameTensorSpec)

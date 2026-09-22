@@ -43,14 +43,17 @@ class CommandInterfaceAdapter
 public:
   /// Create adapter from output configurations.
   /// Looks up converters from the registry for each config.
-  /// @param configs List of output configurations (only hardware outputs).
+  /// @param configs Outputs resolved to hardware command or chained reference interfaces.
   /// @param command_prefix Prefix for command interfaces (for chained controllers).
   /// @param command_suffix Suffix for command interfaces (e.g., "_raw").
+  /// @param joint_name_prefix Prefix applied to joint element names when resolving hardware
+  /// command or chained reference interfaces. Tensor metadata retains the exported names.
   /// @throws std::runtime_error if no converter found for any config's kind.
   explicit CommandInterfaceAdapter(
     const std::vector<isaac_deploy_core::OutputTermConfig> & configs,
     const std::string & command_prefix = "",
-    const std::string & command_suffix = "");
+    const std::string & command_suffix = "",
+    const std::string & joint_name_prefix = "");
 
   /// Get list of required command interface names based on configured outputs.
   std::vector<std::string> get_required_command_interfaces() const;
@@ -64,6 +67,9 @@ public:
   /// @param index Index of the hardware output to write.
   /// @param tensor The tensor with values to write.
   void write_tensor(size_t index, const isaac_deploy_core::NamedTensor & tensor) const;
+
+  /// Mark all claimed command interfaces invalid so a downstream safety controller can hold.
+  void invalidate_command_interfaces() const;
 
   /// Get TensorSpec for a specific hardware output by index.
   isaac_deploy_core::TensorSpec get_tensor_spec(size_t index) const;

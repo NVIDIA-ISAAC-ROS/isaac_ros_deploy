@@ -25,9 +25,26 @@
 #include "isaac_ros_deploy_ros2_control/controllers/joint_command_broadcaster.hpp"
 
 #include <hardware_interface/loaned_state_interface.hpp>
+#include <controller_interface/controller_interface_params.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include "isaac_ros_deploy_interfaces/msg/joint_command.hpp"
+
+namespace
+{
+
+controller_interface::ControllerInterfaceParams make_controller_params(
+  const std::string & name, const rclcpp::NodeOptions & options)
+{
+  controller_interface::ControllerInterfaceParams params;
+  params.controller_name = name;
+  params.controller_manager_update_rate = 100;
+  params.update_rate = 100;
+  params.node_options = options;
+  return params;
+}
+
+}  // namespace
 
 using isaac_ros_deploy_ros2_control::controllers::JointCommandBroadcaster;
 
@@ -73,10 +90,11 @@ protected:
   {
     ASSERT_EQ(
       broadcaster_->init(
-        name, "", 100, "",
-        rclcpp::NodeOptions()
-        .allow_undeclared_parameters(true)
-        .automatically_declare_parameters_from_overrides(true)),
+        make_controller_params(
+          name,
+          rclcpp::NodeOptions()
+          .allow_undeclared_parameters(true)
+          .automatically_declare_parameters_from_overrides(true))),
       controller_interface::return_type::OK);
   }
 
@@ -111,22 +129,25 @@ protected:
     state_interfaces_.clear();
     for (size_t i = 0; i < joint_names.size(); ++i) {
       const auto base = i * kFieldsPerJoint;
-      state_interfaces_.emplace_back(hardware_interface::StateInterface(
+      state_interfaces_.emplace_back(std::make_shared<hardware_interface::StateInterface>(
         command_prefix, joint_names[i] + "/position" + command_suffix, &values_[base + 0]));
-      state_interfaces_.emplace_back(hardware_interface::StateInterface(
+      state_interfaces_.emplace_back(std::make_shared<hardware_interface::StateInterface>(
         command_prefix, joint_names[i] + "/velocity" + command_suffix, &values_[base + 1]));
-      state_interfaces_.emplace_back(hardware_interface::StateInterface(
+      state_interfaces_.emplace_back(std::make_shared<hardware_interface::StateInterface>(
         command_prefix, joint_names[i] + "/effort" + command_suffix, &values_[base + 2]));
-      state_interfaces_.emplace_back(hardware_interface::StateInterface(
+      state_interfaces_.emplace_back(std::make_shared<hardware_interface::StateInterface>(
         command_prefix, joint_names[i] + "/kp" + command_suffix, &values_[base + 3]));
-      state_interfaces_.emplace_back(hardware_interface::StateInterface(
+      state_interfaces_.emplace_back(std::make_shared<hardware_interface::StateInterface>(
         command_prefix, joint_names[i] + "/kd" + command_suffix, &values_[base + 4]));
     }
 
     // Assign state interfaces to the controller.
+    // Lyrical LoanedStateInterface only accepts StateInterface::ConstSharedPtr.
     std::vector<hardware_interface::LoanedStateInterface> loaned;
-    for (auto & si : state_interfaces_) {
-      loaned.emplace_back(si);
+    loaned.reserve(state_interfaces_.size());
+    for (const auto & interface : state_interfaces_) {
+      loaned.emplace_back(
+        std::const_pointer_cast<const hardware_interface::StateInterface>(interface));
     }
     broadcaster_->assign_interfaces({}, std::move(loaned));
 
@@ -138,7 +159,7 @@ protected:
 
   std::unique_ptr<JointCommandBroadcaster> broadcaster_;
   std::vector<double> values_;
-  std::vector<hardware_interface::StateInterface> state_interfaces_;
+  std::vector<hardware_interface::StateInterface::SharedPtr> state_interfaces_;
 };
 
 TEST_F(JointCommandBroadcasterTest, ConfigureSucceedsWithValidParams)
@@ -199,7 +220,9 @@ TEST_F(JointCommandBroadcasterTest, UpdatePublishesAllFields)
   // Spin with retries — the realtime publisher may need a few cycles.
   for (int i = 0; i < 50 && !msg_received; ++i) {
     broadcaster_->update(now, period);
-    rclcpp::spin_some(broadcaster_->get_node()->get_node_base_interface());
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(broadcaster_->get_node()->get_node_base_interface());
+    executor.spin_some();
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 

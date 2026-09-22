@@ -64,50 +64,50 @@ def generate_test_description():
         run_forever: If 'true', the test publishes and spins indefinitely
             instead of asserting. Useful for debugging with rqt_graph.
     """
-    pkg_dir = Path(get_package_share_directory("isaac_ros_deploy_bringup"))
-    test_dir = pkg_dir / "test"
-    data_dir = test_dir / "data"
-    scripts_dir = test_dir / "scripts"
+    pkg_dir = Path(get_package_share_directory('isaac_ros_deploy_bringup'))
+    test_dir = pkg_dir / 'test'
+    data_dir = test_dir / 'data'
+    scripts_dir = test_dir / 'scripts'
 
     # Generate models in a writable temp dir (runfiles are read-only on remote
     # execution).  Copy the YAML config alongside the models so that its
     # relative model_path entries resolve correctly.
     tmp_dir = Path(tempfile.mkdtemp())
 
-    create_script = scripts_dir / "create_multi_model_test_models.py"
+    create_script = scripts_dir / 'create_multi_model_test_models.py'
     subprocess.run(
-        [sys.executable, str(create_script), "-d", str(tmp_dir)],
+        [sys.executable, str(create_script), '-d', str(tmp_dir)],
         check=True,
     )
 
-    shutil.copy(data_dir / "multi_model_inference_graph.yaml", tmp_dir)
-    config_path = str(tmp_dir / "multi_model_inference_graph.yaml")
+    shutil.copy(data_dir / 'multi_model_inference_graph.yaml', tmp_dir)
+    config_path = str(tmp_dir / 'multi_model_inference_graph.yaml')
 
     # Include the reusable inference pipeline launch file.
-    launch_file = str(pkg_dir / "launch" / "inference_graph.launch.py")
+    launch_file = str(pkg_dir / 'launch' / 'inference_graph.launch.py')
 
     # Map ai1's source (state/joint/position) to the joint_states topic.
-    source_to_topic = "state/joint/position:joint_states"
+    source_to_topic = 'state/joint/position:joint_states'
 
     # Map bo1 output to the joint_commands topic.
-    output_to_topic = "bo1:joint_commands"
+    output_to_topic = 'bo1:joint_commands'
 
     pipeline = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(launch_file),
         launch_arguments={
-            "config_path": config_path,
+            'config_path': config_path,
             # Normally the inference takes <2ms, but the first iteration is slow (warm up).
             # Set to 1.0Hz to avoid flakiness from the first iteration.
-            "publish_rate": "1.0",
-            "source_to_topic": source_to_topic,
-            "output_to_topic": output_to_topic,
+            'publish_rate': '1.0',
+            'source_to_topic': source_to_topic,
+            'output_to_topic': output_to_topic,
         }.items(),
     )
 
     run_forever_arg = DeclareLaunchArgument(
-        "run_forever",
-        default_value="false",
-        description="If true, spin forever instead of running assertions.",
+        'run_forever',
+        default_value='false',
+        description='If true, spin forever instead of running assertions.',
     )
 
     return (
@@ -115,8 +115,8 @@ def generate_test_description():
             [
                 run_forever_arg,
                 SetEnvironmentVariable(
-                    "_LAUNCH_TEST_RUN_FOREVER",
-                    LaunchConfiguration("run_forever"),
+                    '_LAUNCH_TEST_RUN_FOREVER',
+                    LaunchConfiguration('run_forever'),
                 ),
                 pipeline,
                 launch_testing.actions.ReadyToTest(),
@@ -141,18 +141,18 @@ class TestMultiModelInferenceGraph(unittest.TestCase):
 
     def setUp(self):
         """Set up test node."""
-        self.node = rclpy.create_node("test_multi_model_inference_graph")
+        self.node = rclpy.create_node('test_multi_model_inference_graph')
         self.received_joint_commands = []
 
         # Publisher — topic is in the inference_graph namespace.
         self.joint_state_pub = self.node.create_publisher(
-            JointState, "/inference_graph/joint_states", 10
+            JointState, '/inference_graph/joint_states', 10
         )
 
         # Subscriber — output topic is also in the namespace.
         self.joint_command_sub = self.node.create_subscription(
             JointCommand,
-            "/inference_graph/joint_commands",
+            '/inference_graph/joint_commands',
             self._joint_command_callback,
             10,
         )
@@ -186,7 +186,7 @@ class TestMultiModelInferenceGraph(unittest.TestCase):
     def _publish_joint_state(self):
         """Publish a JointState with a single joint at position 1.0."""
         joint_state = JointState()
-        joint_state.name = ["test_joint"]
+        joint_state.name = ['test_joint']
         joint_state.position = [1.0]
         joint_state.header.stamp = self.node.get_clock().now().to_msg()
         self.joint_state_pub.publish(joint_state)
@@ -195,7 +195,7 @@ class TestMultiModelInferenceGraph(unittest.TestCase):
         """Test that the multi-model pipeline produces correct values."""
         # Wait for pipeline output publishers to be available.
         self.assertTrue(
-            self._wait_for_topic_publishers("/inference_graph/joint_commands"),
+            self._wait_for_topic_publishers('/inference_graph/joint_commands'),
             "Pipeline output topic '/inference_graph/joint_commands' has no publishers",
         )
 
@@ -204,9 +204,9 @@ class TestMultiModelInferenceGraph(unittest.TestCase):
         # only one message needs to get through.
         publish_timer = self.node.create_timer(0.1, self._publish_joint_state)
 
-        if os.environ.get("_LAUNCH_TEST_RUN_FOREVER", "false") == "true":
-            print("Running in interactive mode (run_forever:=true). "
-                  "Press Ctrl+C to stop.")
+        if os.environ.get('_LAUNCH_TEST_RUN_FOREVER', 'false') == 'true':
+            print('Running in interactive mode (run_forever:=true). '
+                  'Press Ctrl+C to stop.')
             while rclpy.ok():
                 rclpy.spin_once(self.node, timeout_sec=1.0)
             return
@@ -238,9 +238,9 @@ class TestMultiModelInferenceGraph(unittest.TestCase):
                 )
                 or len(self.received_joint_commands) >= max_messages,
             ),
-            f"Did not observe sequence {expected_values} in first "
-            f"{max_messages} messages; got "
-            f"{[m.position[0] for m in self.received_joint_commands]}",
+            f'Did not observe sequence {expected_values} in first '
+            f'{max_messages} messages; got '
+            f'{[m.position[0] for m in self.received_joint_commands]}',
         )
         publish_timer.cancel()
 
@@ -259,12 +259,12 @@ class TestMultiModelInferenceGraph(unittest.TestCase):
         )
         self.assertIsNotNone(
             match_start,
-            f"Expected contiguous sequence {expected_values} not found in "
-            f"{[m.position[0] for m in self.received_joint_commands]}",
+            f'Expected contiguous sequence {expected_values} not found in '
+            f'{[m.position[0] for m in self.received_joint_commands]}',
         )
         self.assertEqual(
             list(self.received_joint_commands[match_start].names),
-            ["test_joint"],
+            ['test_joint'],
         )
 
     @staticmethod

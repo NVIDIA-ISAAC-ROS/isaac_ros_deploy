@@ -169,7 +169,7 @@ void OutputBuilderNode::configure()
 
   // Create single input subscription for the bundled TensorList.
   const auto input_topic = get_parameter("input_topic").as_string();
-  input_sub_ = create_subscription<isaac_ros_tensor_list_interfaces::msg::TensorList>(
+  input_sub_ = create_subscription<isaac_ros_tensor_msgs::msg::TensorList>(
     input_topic, 10,
     std::bind(&OutputBuilderNode::on_tensor_list, this, std::placeholders::_1));
 
@@ -252,18 +252,42 @@ void OutputBuilderNode::create_publication_groups()
   }
 }
 
+isaac_deploy_core::TensorDict OutputBuilderNode::extract_expected_tensors(
+  const isaac_ros_tensor_msgs::msg::TensorList & msg) const
+{
+  isaac_deploy_core::TensorDict nn_outputs;
+  for (size_t i = 0; i < msg.names.size(); ++i) {
+    const auto & name = msg.names[i];
+    if (output_name_to_index_.contains(name)) {
+      nn_outputs.insert_or_assign(name, tensor_msg_to_torch(msg.tensors[i]));
+    }
+  }
+  return nn_outputs;
+}
+
 void OutputBuilderNode::on_tensor_list(
-  const isaac_ros_tensor_list_interfaces::msg::TensorList::SharedPtr msg)
+  const isaac_ros_tensor_msgs::msg::TensorList::SharedPtr msg)
 {
   // Extract tensors matching our expected outputs from the TensorList.
   bool all_received = true;
-  isaac_deploy_core::TensorDict nn_outputs;
 
-  for (const auto & tensor_msg : msg->tensors) {
-    auto it = output_name_to_index_.find(tensor_msg.name);
-    if (it != output_name_to_index_.end()) {
-      nn_outputs[tensor_msg.name] = tensor_msg_to_torch(tensor_msg);
-    }
+  if (msg->names.size() != msg->tensors.size()) {
+    RCLCPP_ERROR(
+      get_logger(), "TensorList names size (%zu) does not match tensors size (%zu)",
+      msg->names.size(), msg->tensors.size());
+    return;
+  }
+  // A malformed payload makes tensor_msg_to_torch throw. This runs in a subscription
+  // callback, so letting it escape would unwind the executor and take the node down;
+  // drop the message instead.
+  isaac_deploy_core::TensorDict nn_outputs;
+  try {
+    nn_outputs = extract_expected_tensors(*msg);
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "Dropping TensorList: failed to convert a tensor payload: %s", e.what());
+    return;
   }
 
   // Check if all expected outputs were present.

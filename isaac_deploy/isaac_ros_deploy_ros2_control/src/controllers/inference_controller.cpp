@@ -18,7 +18,13 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <unordered_set>
 
 #include "isaac_deploy_core/inference_controller/config_parser.hpp"
 #include "isaac_deploy_core/inference_controller/safetensors_loader.hpp"
@@ -27,12 +33,61 @@
 #include "isaac_ros_deploy_ros2_control/controllers/leapp_backend_mapping.hpp"
 #include "isaac_ros_deploy_ros2_control/converters/command_interface_converter.hpp"
 #include "isaac_ros_deploy_ros2_control/converters/state_interface_converter.hpp"
+#include "isaac_ros_deploy_ros2_control/utils/tensor_interface_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
 namespace isaac_ros_deploy_ros2_control
 {
 namespace controllers
 {
+namespace
+{
+
+void set_source_interface_names(
+  isaac_deploy_core::InputTermConfig & term,
+  const std::vector<std::string> & interface_names)
+{
+  if (interface_names.empty()) {
+    return;
+  }
+  while (term.element_names.size() < term.shape.size()) {
+    term.element_names.insert(term.element_names.begin(), std::vector<std::string>{});
+  }
+  if (term.element_names.empty()) {
+    term.element_names.push_back(interface_names);
+  } else {
+    term.element_names.front() = interface_names;
+  }
+}
+
+template<typename NodeT>
+std::vector<std::string> get_optional_string_array_parameter(
+  const NodeT & node, const std::string & param_name)
+{
+  try {
+    if (!node->has_parameter(param_name)) {
+      node->template declare_parameter<std::vector<std::string>>(
+        param_name, std::vector<std::string>{});
+    }
+    std::vector<std::string> value;
+    if (node->get_parameter(param_name, value)) {
+      return value;
+    }
+  } catch (const std::exception & e) {
+    const std::string error = e.what();
+    const bool is_not_set =
+      error.find("got [not set]") != std::string::npos ||
+      error.find("must be initialized") != std::string::npos;
+    if (!is_not_set) {
+      throw std::runtime_error(
+              "parameter " + param_name + " must be a string array: " + error);
+    }
+    return {};
+  }
+  return {};
+}
+
+}  // namespace
 
 InferenceController::InferenceController() = default;
 
@@ -44,6 +99,13 @@ controller_interface::CallbackReturn InferenceController::on_init()
     auto_declare<int>("decimation", 4);
     auto_declare<std::string>("command_prefix", "");
     auto_declare<std::string>("command_suffix", "");
+    auto_declare<std::string>("joint_name_prefix", "");
+    auto_declare<std::vector<std::string>>("topic_input_sources", {});
+    auto_declare<double>("topic_input_timeout_ms", 0.0);
+    auto_declare<bool>("publish_debug_topics", false);
+    auto_declare<bool>("log_debug_to_console", false);
+    auto_declare<std::string>("debug_action_output_name", "arm_action");
+    auto_declare<std::vector<std::string>>("reference_input_sources", {});
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to declare parameters: %s", e.what());
     return controller_interface::CallbackReturn::ERROR;
@@ -60,10 +122,55 @@ controller_interface::CallbackReturn InferenceController::on_configure(
   decimation_ = get_node()->get_parameter("decimation").as_int();
   command_prefix_ = get_node()->get_parameter("command_prefix").as_string();
   command_suffix_ = get_node()->get_parameter("command_suffix").as_string();
+  joint_name_prefix_ = get_node()->get_parameter("joint_name_prefix").as_string();
+  topic_input_sources_ =
+    get_optional_string_array_parameter(get_node(), "topic_input_sources");
+  reference_input_sources_ =
+    get_optional_string_array_parameter(get_node(), "reference_input_sources");
+  const double topic_input_timeout_ms =
+    get_node()->get_parameter("topic_input_timeout_ms").as_double();
 
   if (config_path_.empty()) {
     RCLCPP_ERROR(get_node()->get_logger(), "config_path parameter is required");
     return controller_interface::CallbackReturn::ERROR;
+  }
+  if (decimation_ <= 0) {
+    RCLCPP_ERROR(get_node()->get_logger(), "decimation must be positive");
+    return controller_interface::CallbackReturn::ERROR;
+  }
+  if (!std::isfinite(topic_input_timeout_ms) || topic_input_timeout_ms < 0.0) {
+    RCLCPP_ERROR(get_node()->get_logger(), "topic_input_timeout_ms must be non-negative");
+    return controller_interface::CallbackReturn::ERROR;
+  }
+  topic_input_timeout_ns_ =
+    static_cast<int64_t>(std::llround(topic_input_timeout_ms * 1e6));
+
+  reference_inputs_.clear();
+  std::unordered_set<std::string> reference_input_source_set;
+  for (const auto & source : reference_input_sources_) {
+    if (source.empty()) {
+      RCLCPP_ERROR(get_node()->get_logger(), "reference_input_sources cannot contain empty values");
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    if (!reference_input_source_set.insert(source).second) {
+      RCLCPP_ERROR(
+        get_node()->get_logger(), "Duplicate reference input source: %s", source.c_str());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    auto interface_names = get_optional_string_array_parameter(
+      get_node(), "reference_input_interfaces." + source);
+    if (interface_names.empty()) {
+      RCLCPP_ERROR(
+        get_node()->get_logger(),
+        "reference_input_interfaces.%s must be non-empty when source is forwarded",
+        source.c_str());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    reference_inputs_.push_back(
+        {
+          .source = source,
+          .command_interfaces = std::move(interface_names),
+      });
   }
 
   // Initialize the converter registries needed by this controller.
@@ -82,6 +189,28 @@ controller_interface::CallbackReturn InferenceController::on_configure(
   // thanks to TRANSIENT_LOCAL durability.
   is_active_publisher_ = get_node()->create_publisher<std_msgs::msg::Bool>(
     "~/is_active", rclcpp::QoS(1).transient_local().reliable());
+
+  publish_debug_topics_ = get_node()->get_parameter("publish_debug_topics").as_bool();
+  log_debug_to_console_ = get_node()->get_parameter("log_debug_to_console").as_bool();
+  debug_action_output_name_ =
+    get_node()->get_parameter("debug_action_output_name").as_string();
+
+  if (publish_debug_topics_) {
+    auto qos = rclcpp::QoS(10).best_effort();
+    obs_debug_publisher_ = std::make_shared<DebugPublisher>(
+      get_node()->create_publisher<std_msgs::msg::Float64MultiArray>(
+        "~/debug_observation", qos));
+    action_debug_publisher_ = std::make_shared<DebugPublisher>(
+      get_node()->create_publisher<std_msgs::msg::Float64MultiArray>(
+        "~/debug_action", qos));
+    recurrent_debug_publisher_ = std::make_shared<DebugPublisher>(
+      get_node()->create_publisher<std_msgs::msg::Float64MultiArray>(
+        "~/debug_recurrent_state", qos));
+    RCLCPP_INFO(
+      get_node()->get_logger(),
+      "Debug topic publishing enabled: ~/debug_observation, ~/debug_action, "
+      "~/debug_recurrent_state");
+  }
 
   RCLCPP_INFO(
     get_node()->get_logger(), "Configured InferenceController with config: %s",
@@ -129,9 +258,16 @@ bool InferenceController::load_config()
         std::string(inputs_result.error().message).c_str());
       return false;
     }
+    for (auto & term : inputs_result.value().terms) {
+      set_source_interface_names(
+        term,
+        get_optional_string_array_parameter(get_node(), "input_interfaces." + term.source));
+    }
 
     // Classify input terms using the state interface converter registry.
     const auto & state_registry = StateInterfaceConverterRegistry::instance();
+    const std::unordered_set<std::string> topic_input_sources(
+      topic_input_sources_.begin(), topic_input_sources_.end());
     std::vector<isaac_deploy_core::InputTermConfig> hardware_input_configs;
     topic_source_configs_.clear();
 
@@ -142,7 +278,7 @@ bool InferenceController::load_config()
           get_node()->get_logger(),
           "Input '%s' (kind: %s) is feedback, handled by core library",
           term.name.c_str(), term.kind.c_str());
-      } else if (state_registry.contains(term.kind)) {
+      } else if (!topic_input_sources.contains(term.source) && state_registry.contains(term.kind)) {
         // Hardware input — read from state interfaces.
         hardware_input_configs.push_back(term);
         RCLCPP_INFO(
@@ -158,7 +294,8 @@ bool InferenceController::load_config()
     }
 
     // Create state interface adapter.
-    state_adapter_ = std::make_unique<StateInterfaceAdapter>(hardware_input_configs);
+    state_adapter_ = std::make_unique<StateInterfaceAdapter>(
+      hardware_input_configs, joint_name_prefix_);
 
     auto outputs_result =
       isaac_deploy_core::OutputBuilder::Config::create_from_model_config(sections);
@@ -190,7 +327,7 @@ bool InferenceController::load_config()
 
     // Create command interface adapter.
     command_adapter_ = std::make_unique<CommandInterfaceAdapter>(
-      output_configs, command_prefix_, command_suffix_);
+      output_configs, command_prefix_, command_suffix_, joint_name_prefix_);
 
     // Parse runner config (from config sections, with parameter overrides).
     isaac_deploy_core::InferenceRunner::Config runner_config;
@@ -280,6 +417,7 @@ bool InferenceController::load_config()
 
 void InferenceController::create_topic_subscriptions()
 {
+  topic_groups_.clear();
   auto & registry = isaac_ros_deploy_converters::MessageToTensorConverterRegistry::instance();
 
   // Resolve the ROS topic for a given source name via parameter.
@@ -353,8 +491,11 @@ void InferenceController::create_topic_subscriptions()
 
   // Create one generic subscription per topic group.
   for (auto & [topic, group] : groups_by_topic) {
-    auto callback = [grp = group.get()](std::shared_ptr<rclcpp::SerializedMessage> msg) {
-        grp->rt_msg_buffer.writeFromNonRT(msg);
+    auto callback = [this, grp = group.get()](std::shared_ptr<rclcpp::SerializedMessage> msg) {
+        auto sample = std::make_shared<TopicGroup::TopicSample>();
+        sample->message = msg;
+        sample->receive_time_ns = get_node()->now().nanoseconds();
+        grp->rt_msg_buffer.writeFromNonRT(sample);
       };
 
     group->subscription = get_node()->create_generic_subscription(
@@ -382,6 +523,12 @@ InferenceController::command_interface_configuration() const
 
   if (command_adapter_) {
     config.names = command_adapter_->get_required_command_interfaces();
+    for (const auto & reference_input : reference_inputs_) {
+      config.names.insert(
+        config.names.end(),
+        reference_input.command_interfaces.begin(),
+        reference_input.command_interfaces.end());
+    }
     RCLCPP_DEBUG(
       get_node()->get_logger(), "Requesting %zu command interfaces", config.names.size());
     for (const auto & name : config.names) {
@@ -442,6 +589,7 @@ controller_interface::CallbackReturn InferenceController::on_activate(
     const std::string source = state_adapter_->get_input_source(i);
     auto [it, inserted] = source_seen.try_emplace(source, inputs_.size());
     if (inserted) {
+      source_to_input_idx_[source] = it->second;
       inputs_.push_back(
           {
             .name = source,
@@ -468,6 +616,16 @@ controller_interface::CallbackReturn InferenceController::on_activate(
           });
       input_specs_.push_back(isaac_deploy_core::TensorSpec{});
     }
+  }
+
+  try {
+    if (!resolve_reference_input_indices()) {
+      return controller_interface::CallbackReturn::ERROR;
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(
+      get_node()->get_logger(), "Failed to set up reference input forwarding: %s", e.what());
+    return controller_interface::CallbackReturn::ERROR;
   }
 
   // Build output tensors for ALL output terms (hardware + state/feedback).
@@ -506,7 +664,7 @@ controller_interface::CallbackReturn InferenceController::on_activate(
   // first message (so converters can provide TensorSpecs for reordering).
   core_activated_ = false;
   if (topic_groups_.empty()) {
-    if (!try_activate_core(timestamp_ns)) {
+    if (!try_activate_core()) {
       return controller_interface::CallbackReturn::ERROR;
     }
   }
@@ -519,24 +677,25 @@ controller_interface::CallbackReturn InferenceController::on_activate(
   return controller_interface::CallbackReturn::SUCCESS;
 }
 
-bool InferenceController::try_activate_core(int64_t timestamp_ns)
+bool InferenceController::try_activate_core()
 {
   // Check that all topic groups have received at least one message.
   for (const auto & group : topic_groups_) {
-    if (!*group->rt_msg_buffer.readFromRT()) {
+    const auto sample = *group->rt_msg_buffer.readFromRT();
+    if (!sample || !sample->message) {
       return false;
     }
   }
 
   // Convert first messages and populate TensorSpecs from converters.
   for (const auto & group : topic_groups_) {
-    const auto msg = *group->rt_msg_buffer.readFromRT();
+    const auto sample = *group->rt_msg_buffer.readFromRT();
 
     for (const auto & entry : group->entries) {
       auto it = source_to_input_idx_.find(entry.source);
       if (it != source_to_input_idx_.end()) {
-        inputs_[it->second].tensor = entry.converter->convert(msg);
-        inputs_[it->second].timestamp_ns = timestamp_ns;
+        inputs_[it->second].tensor = entry.converter->convert(sample->message);
+        inputs_[it->second].timestamp_ns = sample->receive_time_ns;
         input_specs_[it->second] = entry.converter->get_tensor_spec();
       }
     }
@@ -559,6 +718,85 @@ bool InferenceController::try_activate_core(int64_t timestamp_ns)
     msg.data = true;
     is_active_publisher_->publish(msg);
   }
+
+  // Pre-allocate debug publisher messages now that input/output sizes are known.
+  if (publish_debug_topics_) {
+    // Collect external input names (exclude LSTM feedback states identified by "_in" suffix).
+    debug_obs_input_names_.clear();
+    debug_obs_input_indices_.clear();
+    size_t obs_size = 0;
+    for (size_t input_idx = 0; input_idx < inputs_.size(); ++input_idx) {
+      const auto & inp = inputs_[input_idx];
+      const bool is_feedback = inp.name.size() >= 3 &&
+        inp.name.substr(inp.name.size() - 3) == "_in";
+      if (!is_feedback) {
+        debug_obs_input_names_.push_back(inp.name);
+        debug_obs_input_indices_.push_back(input_idx);
+        obs_size += static_cast<size_t>(inp.tensor.numel());
+      }
+    }
+    size_t action_size = 0;
+    auto action_it = output_name_to_idx_.find(debug_action_output_name_);
+    if (action_it != output_name_to_idx_.end()) {
+      action_size = static_cast<size_t>(outputs_[action_it->second].tensor.numel());
+    } else {
+      RCLCPP_WARN(
+        get_node()->get_logger(),
+        "debug_action_output_name '%s' not found in outputs; action debug topic will be empty",
+        debug_action_output_name_.c_str());
+    }
+    if (obs_debug_publisher_) {
+      obs_debug_msg_.data.resize(obs_size, 0.0);
+      RCLCPP_INFO(
+        get_node()->get_logger(),
+        "Debug observation: %zu values from inputs [%s]",
+        obs_size,
+        [&]() {
+          std::string s;
+          for (const auto & n : debug_obs_input_names_) {
+            s += n + " ";
+          }
+          return s;
+        }().c_str());
+    }
+    if (action_debug_publisher_) {
+      action_debug_msg_.data.resize(action_size, 0.0);
+      RCLCPP_INFO(
+        get_node()->get_logger(),
+        "Debug action: %zu values from output '%s'",
+        action_size, debug_action_output_name_.c_str());
+    }
+
+    // Collect recurrent hidden-state outputs (names ending in "_out").
+    debug_recurrent_output_names_.clear();
+    debug_recurrent_output_indices_.clear();
+    size_t recurrent_size = 0;
+    for (size_t out_idx = 0; out_idx < outputs_.size(); ++out_idx) {
+      const auto & out = outputs_[out_idx];
+      const bool is_recurrent = out.name.size() >= 4 &&
+        out.name.substr(out.name.size() - 4) == "_out";
+      if (is_recurrent) {
+        debug_recurrent_output_names_.push_back(out.name);
+        debug_recurrent_output_indices_.push_back(out_idx);
+        recurrent_size += static_cast<size_t>(out.tensor.numel());
+      }
+    }
+    if (recurrent_debug_publisher_) {
+      recurrent_debug_msg_.data.resize(recurrent_size, 0.0);
+      RCLCPP_INFO(
+        get_node()->get_logger(),
+        "Debug recurrent state: %zu values from outputs [%s]",
+        recurrent_size,
+        [&]() {
+          std::string s;
+          for (const auto & n : debug_recurrent_output_names_) {
+            s += n + " ";
+          }
+          return s;
+        }().c_str());
+    }
+  }
+
   RCLCPP_INFO(get_node()->get_logger(), "Core InferenceController activated");
   return true;
 }
@@ -576,6 +814,7 @@ controller_interface::CallbackReturn InferenceController::on_deactivate(
   }
 
   core_activated_ = false;
+  debug_step_ = 0;
   if (is_active_publisher_) {
     std_msgs::msg::Bool msg;
     msg.data = false;
@@ -588,6 +827,14 @@ controller_interface::CallbackReturn InferenceController::on_deactivate(
   hw_to_input_idx_.clear();
   source_to_input_idx_.clear();
   output_name_to_idx_.clear();
+  for (auto & reference_input : reference_inputs_) {
+    reference_input.command_indices.clear();
+    reference_input.input_index = 0;
+  }
+  debug_obs_input_names_.clear();
+  debug_obs_input_indices_.clear();
+  debug_recurrent_output_names_.clear();
+  debug_recurrent_output_indices_.clear();
 
   // Clear latest messages from topic groups.
   for (auto & group : topic_groups_) {
@@ -616,10 +863,11 @@ controller_interface::return_type InferenceController::update(
 
   // Deferred activation: wait for all topic groups to have their first message.
   if (!core_activated_) {
-    if (!try_activate_core(timestamp_ns)) {
+    if (!try_activate_core()) {
       std::string pending_topics;
       for (const auto & group : topic_groups_) {
-        if (!*group->rt_msg_buffer.readFromRT()) {
+        const auto sample = *group->rt_msg_buffer.readFromRT();
+        if (!sample || !sample->message) {
           if (!pending_topics.empty()) {pending_topics += ", ";}
           pending_topics += "'" + group->topic + "'";
         }
@@ -639,16 +887,26 @@ controller_interface::return_type InferenceController::update(
     inputs_[input_idx].timestamp_ns = timestamp_ns;
   }
 
+  if (!topic_inputs_are_fresh(timestamp_ns)) {
+    command_adapter_->invalidate_command_interfaces();
+    invalidate_reference_inputs();
+    RCLCPP_WARN_THROTTLE(
+      get_node()->get_logger(), *get_node()->get_clock(), 1000,
+      "A topic input is stale; invalidating policy commands so SafetyController holds the "
+      "measured positions captured at stale entry");
+    return controller_interface::return_type::OK;
+  }
+
   // Update topic inputs from latest messages via converters.
   for (const auto & group : topic_groups_) {
-    const auto msg = *group->rt_msg_buffer.readFromRT();
-    if (!msg) {continue;}
+    const auto sample = *group->rt_msg_buffer.readFromRT();
+    if (!sample || !sample->message) {continue;}
 
     for (const auto & entry : group->entries) {
       auto it = source_to_input_idx_.find(entry.source);
       if (it != source_to_input_idx_.end()) {
-        inputs_[it->second].tensor = entry.converter->convert(msg);
-        inputs_[it->second].timestamp_ns = timestamp_ns;
+        inputs_[it->second].tensor = entry.converter->convert(sample->message);
+        inputs_[it->second].timestamp_ns = sample->receive_time_ns;
       }
     }
   }
@@ -662,6 +920,16 @@ controller_interface::return_type InferenceController::update(
     return controller_interface::return_type::ERROR;
   }
 
+  if (!write_reference_inputs()) {
+    command_adapter_->invalidate_command_interfaces();
+    invalidate_reference_inputs();
+    RCLCPP_WARN_THROTTLE(
+      get_node()->get_logger(), *get_node()->get_clock(), 1000,
+      "Failed to publish reference input tensors; "
+      "invalidating policy command references");
+    return controller_interface::return_type::OK;
+  }
+
   // Write outputs to command interfaces.
   for (size_t i = 0; i < command_adapter_->get_num_outputs(); ++i) {
     const std::string name = command_adapter_->get_output_name(i);
@@ -671,7 +939,177 @@ controller_interface::return_type InferenceController::update(
     }
   }
 
+  if (publish_debug_topics_) {
+    publish_debug_topics();
+  }
+
   return controller_interface::return_type::OK;
+}
+
+bool InferenceController::resolve_reference_input_indices()
+{
+  for (auto & reference_input : reference_inputs_) {
+    auto interface_indices = utils::find_command_interface_indices(
+      reference_input.command_interfaces, command_interfaces_);
+    if (!interface_indices.has_value()) {
+      throw std::runtime_error(
+              "Failed to find command interfaces for forwarded input source: " +
+              reference_input.source);
+    }
+    const auto input_it = source_to_input_idx_.find(reference_input.source);
+    if (input_it == source_to_input_idx_.end()) {
+      throw std::runtime_error(
+              "Forwarded input source not found in configured inputs: " +
+              reference_input.source);
+    }
+    reference_input.command_indices = std::move(interface_indices.value());
+    reference_input.input_index = input_it->second;
+    const auto numel = inputs_[reference_input.input_index].tensor.numel();
+    if (numel < 0 ||
+      static_cast<size_t>(numel) != reference_input.command_indices.size())
+    {
+      throw std::runtime_error(
+              "Forwarded input source '" + reference_input.source + "' has " +
+              std::to_string(numel) + " tensor values but " +
+              std::to_string(reference_input.command_indices.size()) +
+              " command interfaces");
+    }
+  }
+  return true;
+}
+
+bool InferenceController::write_reference_inputs()
+{
+  for (const auto & reference_input : reference_inputs_) {
+    if (reference_input.input_index >= inputs_.size()) {
+      return false;
+    }
+    const auto & tensor = inputs_[reference_input.input_index].tensor;
+    if (!tensor.device().is_cpu() || tensor.scalar_type() != torch::kFloat32 ||
+      !tensor.is_contiguous() ||
+      static_cast<size_t>(tensor.numel()) != reference_input.command_indices.size())
+    {
+      return false;
+    }
+
+    const float * values = tensor.data_ptr<float>();
+    for (size_t i = 0; i < reference_input.command_indices.size(); ++i) {
+      const double value = static_cast<double>(values[i]);
+      if (!std::isfinite(value)) {
+        return false;
+      }
+      (void)command_interfaces_[reference_input.command_indices[i]].set_value(value);
+    }
+  }
+  return true;
+}
+
+void InferenceController::invalidate_reference_inputs()
+{
+  for (const auto & reference_input : reference_inputs_) {
+    for (const auto index : reference_input.command_indices) {
+      (void)command_interfaces_[index].set_value(std::numeric_limits<double>::quiet_NaN());
+    }
+  }
+}
+
+void InferenceController::publish_debug_topics()
+{
+  ++debug_step_;
+
+  // Collect observation vector (external inputs, excluding LSTM feedback states).
+  std::vector<float> obs_flat;
+  for (const auto input_idx : debug_obs_input_indices_) {
+    const auto flat = inputs_[input_idx].tensor.flatten().to(torch::kFloat32).contiguous();
+    const float * ptr = flat.data_ptr<float>();
+    obs_flat.insert(obs_flat.end(), ptr, ptr + flat.numel());
+  }
+
+  // Collect action vector.
+  std::vector<float> action_flat;
+  auto action_it = output_name_to_idx_.find(debug_action_output_name_);
+  if (action_it != output_name_to_idx_.end()) {
+    const auto flat =
+      outputs_[action_it->second].tensor.flatten().to(torch::kFloat32).contiguous();
+    const float * ptr = flat.data_ptr<float>();
+    action_flat.insert(action_flat.end(), ptr, ptr + flat.numel());
+  }
+
+  // Console log.
+  if (log_debug_to_console_) {
+    std::string obs_str;
+    for (size_t i = 0; i < obs_flat.size(); ++i) {
+      if (i) {obs_str += ", ";}
+      char buf[16];
+      snprintf(buf, sizeof(buf), "%.4f", obs_flat[i]);
+      obs_str += buf;
+    }
+    std::string act_str;
+    for (size_t i = 0; i < action_flat.size(); ++i) {
+      if (i) {act_str += ", ";}
+      char buf[16];
+      snprintf(buf, sizeof(buf), "%.4f", action_flat[i]);
+      act_str += buf;
+    }
+    RCLCPP_INFO(
+      get_node()->get_logger(),
+      "[STEP %ld] obs(%zu)=[%s] action(%zu)=[%s]",
+      debug_step_, obs_flat.size(), obs_str.c_str(),
+      action_flat.size(), act_str.c_str());
+  }
+
+  // Topic publish.
+  if (obs_debug_publisher_) {
+    auto & data = obs_debug_msg_.data;
+    for (size_t i = 0; i < obs_flat.size() && i < data.size(); ++i) {
+      data[i] = static_cast<double>(obs_flat[i]);
+    }
+    obs_debug_publisher_->try_publish(obs_debug_msg_);
+  }
+
+  if (action_debug_publisher_) {
+    auto & data = action_debug_msg_.data;
+    for (size_t i = 0; i < action_flat.size() && i < data.size(); ++i) {
+      data[i] = static_cast<double>(action_flat[i]);
+    }
+    action_debug_publisher_->try_publish(action_debug_msg_);
+  }
+
+  // Recurrent hidden state ("_out" tensors): the state produced this step, which
+  // is fed back as the next step's "_in". Concatenated in output order.
+  if (recurrent_debug_publisher_) {
+    auto & data = recurrent_debug_msg_.data;
+    size_t offset = 0;
+    for (const auto output_idx : debug_recurrent_output_indices_) {
+      const auto flat =
+        outputs_[output_idx].tensor.flatten().to(torch::kFloat32).contiguous();
+      const float * ptr = flat.data_ptr<float>();
+      for (int64_t i = 0; i < flat.numel() && offset < data.size(); ++i, ++offset) {
+        data[offset] = static_cast<double>(ptr[i]);
+      }
+    }
+    recurrent_debug_publisher_->try_publish(recurrent_debug_msg_);
+  }
+}
+
+bool InferenceController::topic_inputs_are_fresh(int64_t current_time_ns) const
+{
+  if (topic_input_timeout_ns_ <= 0) {
+    return true;
+  }
+
+  for (const auto & group : topic_groups_) {
+    const auto sample = *group->rt_msg_buffer.readFromRT();
+    if (!sample || !sample->message) {
+      return false;
+    }
+    const int64_t age_ns = std::max<int64_t>(
+      current_time_ns - sample->receive_time_ns, 0);
+    if (age_ns > topic_input_timeout_ns_) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace controllers

@@ -80,8 +80,11 @@ private:
   std::vector<size_t> kd_indices_;
 
   // Real-time safe publisher.
+  // Keep a local message; Lyrical RealtimePublisher::msg_ is private and
+  // publish uses try_publish(msg) instead of trylock/unlockAndPublish.
   using MsgType = isaac_ros_deploy_interfaces::msg::JointCommand;
   using RealtimePublisher = realtime_tools::RealtimePublisher<MsgType>;
+  MsgType msg_;
   std::shared_ptr<RealtimePublisher> realtime_publisher_;
   rclcpp::Publisher<MsgType>::SharedPtr publisher_;
 };

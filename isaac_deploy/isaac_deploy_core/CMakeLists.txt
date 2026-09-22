@@ -18,8 +18,14 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
-find_package(tl_expected REQUIRED)
 find_package(nlohmann_json REQUIRED)
+
+if("$ENV{ROS_DISTRO}" STREQUAL "lyrical")
+  find_package(rcpputils REQUIRED)
+  set(ISAAC_DEPLOY_USE_BUNDLED_TL_EXPECTED TRUE)
+else()
+  find_package(tl_expected REQUIRED)
+endif()
 
 # Find LibTorch (installed via pip in the Docker image).
 # Use Python to discover torch's cmake config path since pip installs
@@ -37,38 +43,30 @@ endif()
 find_package(Torch REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
-# Download and find Triton Inference Server.
-include(FetchContent)
-if(NOT TRITON_SERVER_TARBALL_URL)
-  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-    set(_TRITON_BASE_URL "https://github.com/triton-inference-server/server/releases/download")
-    set(TRITON_SERVER_TARBALL_URL "${_TRITON_BASE_URL}/v2.60.0/tritonserver2.60.0-agx.tar")
-  else()
-    set(_TRITON_BASE_URL "https://artifactory.pdx.nvidia.com/artifactory")
-    set(_TRITON_PATH "sw-isaac-ros-generic-local/triton/tritonserver.2.60.tar.gz")
-    set(TRITON_SERVER_TARBALL_URL "${_TRITON_BASE_URL}/${_TRITON_PATH}")
-  endif()
-endif()
-fetchcontent_declare(
-  tritonserver
-  URL ${TRITON_SERVER_TARBALL_URL}
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+# Triton Server is installed under /opt by the triton-server Debian dependency.
+find_path(
+  _TRITON_INC_DIR
+  NAMES triton/core/tritonserver.h
+  PATHS /opt/tritonserver/include
+  NO_DEFAULT_PATH
 )
-fetchcontent_populate(tritonserver)
-
-file(GLOB_RECURSE _TRITON_HDR_CANDIDATES "${tritonserver_SOURCE_DIR}/*/tritonserver.h")
-list(GET _TRITON_HDR_CANDIDATES 0 _TRITONSERVER_H)
-get_filename_component(_TRITON_CORE_DIR "${_TRITONSERVER_H}" DIRECTORY)
-get_filename_component(_TRITON_DIR "${_TRITON_CORE_DIR}" DIRECTORY)
-get_filename_component(_TRITON_INC_DIR "${_TRITON_DIR}" DIRECTORY)
-
-file(GLOB_RECURSE _TRITON_LIB_CANDIDATES "${tritonserver_SOURCE_DIR}/*/libtritonserver.so")
-list(GET _TRITON_LIB_CANDIDATES 0 _TRITONSERVER_SO)
+find_library(
+  _TRITONSERVER_SO
+  NAMES tritonserver
+  PATHS /opt/tritonserver/lib /opt/tritonserver/lib64
+  NO_DEFAULT_PATH
+)
+if(NOT _TRITON_INC_DIR OR NOT _TRITONSERVER_SO)
+  message(
+    FATAL_ERROR
+    "The triton-server Debian dependency is not installed under /opt/tritonserver"
+  )
+endif()
 get_filename_component(_TRITON_LIB_DIR "${_TRITONSERVER_SO}" DIRECTORY)
 
 add_library(tritonserver::tritonserver SHARED IMPORTED)
 set_target_properties(tritonserver::tritonserver PROPERTIES
-  IMPORTED_LOCATION "${_TRITON_LIB_DIR}/libtritonserver.so"
+  IMPORTED_LOCATION "${_TRITONSERVER_SO}"
   INTERFACE_INCLUDE_DIRECTORIES "${_TRITON_INC_DIR}"
 )
 
@@ -112,7 +110,12 @@ target_include_directories(expected INTERFACE
   $<BUILD_INTERFACE:${BUILD_INCLUDE_DIR}>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(expected INTERFACE tl_expected::tl_expected)
+if(ISAAC_DEPLOY_USE_BUNDLED_TL_EXPECTED)
+  target_compile_definitions(expected INTERFACE ISAAC_DEPLOY_USE_BUNDLED_TL_EXPECTED)
+  target_link_libraries(expected INTERFACE rcpputils::rcpputils)
+else()
+  target_link_libraries(expected INTERFACE tl_expected::tl_expected)
+endif()
 
 # core::tensor_utils
 add_library(tensor_utils SHARED
@@ -417,7 +420,11 @@ install(
 
 # Export targets for downstream packages.
 ament_export_targets(isaac_deploy_core_targets HAS_LIBRARY_TARGET)
-ament_export_dependencies(yaml-cpp tl_expected rclcpp nlohmann_json)
+if(ISAAC_DEPLOY_USE_BUNDLED_TL_EXPECTED)
+  ament_export_dependencies(yaml-cpp rcpputils rclcpp nlohmann_json)
+else()
+  ament_export_dependencies(yaml-cpp tl_expected rclcpp nlohmann_json)
+endif()
 
 # Export LibTorch and ONNX Runtime for downstream packages.
 # Configure the extras file from template to the build directory
@@ -436,10 +443,6 @@ install(FILES
 # Register the configured extras file (relative to build directory)
 list(
   APPEND ${PROJECT_NAME}_CONFIG_EXTRAS
-  "${CMAKE_CURRENT_BINARY_DIR}/cmake/isaac_deploy_core-extras.cmake"
-)
-list(
-  APPEND ${PROJECT_NAME}_CONFIG_EXTRAS_POST
   "${CMAKE_CURRENT_BINARY_DIR}/cmake/isaac_deploy_core-extras.cmake"
 )
 

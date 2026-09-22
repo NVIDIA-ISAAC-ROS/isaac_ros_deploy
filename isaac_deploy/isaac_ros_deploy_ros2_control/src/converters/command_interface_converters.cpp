@@ -74,6 +74,44 @@ private:
   std::string interface_type_;
 };
 
+/// Converter for flat relative Cartesian pose action command/reference interfaces.
+class FlatBodyPoseCommandConverter : public CommandInterfaceConverter
+{
+public:
+  std::vector<std::string> get_required_command_interfaces(
+    const std::vector<std::vector<std::string>> & element_names,
+    const std::string & prefix, const std::string & suffix) const override
+  {
+    const std::vector<std::string> default_names{
+      "delta_x", "delta_y", "delta_z",
+      "delta_axis_angle_x", "delta_axis_angle_y", "delta_axis_angle_z"};
+    const auto & names = element_names.empty() || element_names.back().empty() ?
+      default_names : element_names.back();
+    std::vector<std::string> interfaces;
+    interfaces.reserve(names.size());
+    for (const auto & name : names) {
+      std::string interface_name;
+      if (!prefix.empty()) {
+        interface_name = prefix + "/";
+      }
+      interface_name += name + suffix;
+      interfaces.push_back(interface_name);
+    }
+    return interfaces;
+  }
+
+  isaac_deploy_core::TensorSpec get_tensor_spec(
+    const std::vector<std::vector<std::string>> & element_names) const override
+  {
+    if (element_names.empty() || element_names.back().empty()) {
+      return {.names = {{},
+          {"delta_x", "delta_y", "delta_z",
+            "delta_axis_angle_x", "delta_axis_angle_y", "delta_axis_angle_z"}}};
+    }
+    return {.names = element_names};
+  }
+};
+
 }  // namespace
 
 void initialize_command_interface_converters()
@@ -85,6 +123,38 @@ void initialize_command_interface_converters()
       registry.register_converter(
         "target/joint/position", []() {
           return std::make_shared<JointCommandConverter>("position");
+        });
+      registry.register_converter(
+        "target/body/pose_relative", []() {
+          return std::make_shared<FlatBodyPoseCommandConverter>();
+        });
+      registry.register_converter(
+        "target/body/pose_rel", []() {
+          return std::make_shared<FlatBodyPoseCommandConverter>();
+        });
+      registry.register_converter(
+        "target/body/pose_delta", []() {
+          return std::make_shared<FlatBodyPoseCommandConverter>();
+        });
+      registry.register_converter(
+        "target/body/relative_pose", []() {
+          return std::make_shared<FlatBodyPoseCommandConverter>();
+        });
+      registry.register_converter(
+        "command/body/pose_rel", []() {
+          return std::make_shared<FlatBodyPoseCommandConverter>();
+        });
+      registry.register_converter(
+        "command/body/pose_relative", []() {
+          return std::make_shared<FlatBodyPoseCommandConverter>();
+        });
+      registry.register_converter(
+        "command/body/pose_delta", []() {
+          return std::make_shared<FlatBodyPoseCommandConverter>();
+        });
+      registry.register_converter(
+        "command/body/relative_pose", []() {
+          return std::make_shared<FlatBodyPoseCommandConverter>();
         });
       registry.register_converter(
         "kp", []() {

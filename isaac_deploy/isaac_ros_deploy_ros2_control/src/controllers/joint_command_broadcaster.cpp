@@ -64,15 +64,14 @@ controller_interface::CallbackReturn JointCommandBroadcaster::on_configure(
     topic_name_, rclcpp::SystemDefaultsQoS());
   realtime_publisher_ = std::make_shared<RealtimePublisher>(publisher_);
 
-  // Pre-populate the static fields of the message.
-  auto & msg = realtime_publisher_->msg_;
-  msg.names = joint_names_;
+  // Pre-populate the static fields of the cached message.
+  msg_.names = joint_names_;
   const auto n = joint_names_.size();
-  msg.position.resize(n, 0.0);
-  msg.velocity.resize(n, 0.0);
-  msg.effort.resize(n, 0.0);
-  msg.kp.resize(n, 0.0);
-  msg.kd.resize(n, 0.0);
+  msg_.position.resize(n, 0.0);
+  msg_.velocity.resize(n, 0.0);
+  msg_.effort.resize(n, 0.0);
+  msg_.kp.resize(n, 0.0);
+  msg_.kd.resize(n, 0.0);
 
   RCLCPP_INFO(
     get_node()->get_logger(),
@@ -176,29 +175,30 @@ controller_interface::CallbackReturn JointCommandBroadcaster::on_deactivate(
 controller_interface::return_type JointCommandBroadcaster::update(
   const rclcpp::Time & time, const rclcpp::Duration &)
 {
-  if (realtime_publisher_ && realtime_publisher_->trylock()) {
-    auto & msg = realtime_publisher_->msg_;
-    msg.header.stamp = time;
-
-    // Use NaN (rather than 0.0) on a read failure so training data makes
-    // the gap visible instead of silently encoding a spurious
-    // "commanded 0 to all joints" frame.
-    constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-    for (size_t i = 0; i < joint_names_.size(); ++i) {
-      msg.position[i] =
-        state_interfaces_[position_indices_[i]].get_optional<double>().value_or(kNaN);
-      msg.velocity[i] =
-        state_interfaces_[velocity_indices_[i]].get_optional<double>().value_or(kNaN);
-      msg.effort[i] =
-        state_interfaces_[effort_indices_[i]].get_optional<double>().value_or(kNaN);
-      msg.kp[i] =
-        state_interfaces_[kp_indices_[i]].get_optional<double>().value_or(kNaN);
-      msg.kd[i] =
-        state_interfaces_[kd_indices_[i]].get_optional<double>().value_or(kNaN);
-    }
-
-    realtime_publisher_->unlockAndPublish();
+  if (!realtime_publisher_) {
+    return controller_interface::return_type::OK;
   }
+
+  msg_.header.stamp = time;
+
+  // Use NaN (rather than 0.0) on a read failure so training data makes
+  // the gap visible instead of silently encoding a spurious
+  // "commanded 0 to all joints" frame.
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  for (size_t i = 0; i < joint_names_.size(); ++i) {
+    msg_.position[i] =
+      state_interfaces_[position_indices_[i]].get_optional<double>().value_or(kNaN);
+    msg_.velocity[i] =
+      state_interfaces_[velocity_indices_[i]].get_optional<double>().value_or(kNaN);
+    msg_.effort[i] =
+      state_interfaces_[effort_indices_[i]].get_optional<double>().value_or(kNaN);
+    msg_.kp[i] =
+      state_interfaces_[kp_indices_[i]].get_optional<double>().value_or(kNaN);
+    msg_.kd[i] =
+      state_interfaces_[kd_indices_[i]].get_optional<double>().value_or(kNaN);
+  }
+
+  realtime_publisher_->try_publish(msg_);
 
   return controller_interface::return_type::OK;
 }

@@ -20,7 +20,7 @@ limitations under the License.
 
 <package format="3">
   <name>isaac_ros_deploy_ros2_control</name>
-  <version>4.6.0</version>
+  <version>5.0.0</version>
   <description>ROS 2 control wrappers for isaac_deploy_core inference and safety controllers</description>
   <maintainer email="isaac-ros-maintainers@nvidia.com">Isaac ROS Maintainers</maintainer>
   <license>Apache-2.0</license>
@@ -30,7 +30,8 @@ limitations under the License.
 
   <!-- isaac_deploy libraries -->
   <depend>python3-torch-pip-shim</depend>
-  <build_depend>cuda-toolkit</build_depend>
+  <build_depend condition="$ISAAC_ROS_PLATFORM != arm64-fastos">cuda-toolkit-13-2</build_depend>
+  <build_depend condition="$ISAAC_ROS_PLATFORM == arm64-fastos">cuda-toolkit-13-0</build_depend>
   <depend>isaac_deploy_core</depend>
   <depend>isaac_ros_deploy_converters</depend>
 
@@ -39,9 +40,11 @@ limitations under the License.
   <depend>controller_interface</depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
+  <depend>rcl_interfaces</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_lifecycle</depend>
   <depend>realtime_tools</depend>
+  <depend>urdf</depend>
 
   <!-- ROS2 Messages -->
   <depend>std_msgs</depend>
