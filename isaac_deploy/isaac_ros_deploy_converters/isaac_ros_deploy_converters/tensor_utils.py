@@ -1,4 +1,5 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -13,36 +14,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared utilities for building TensorList messages from numpy arrays."""
+"""Shared utilities for building CUDA-buffer-compatible tensor messages."""
 
-from isaac_ros_tensor_list_interfaces.msg import Tensor, TensorShape
 import numpy as np
+from tensor_msgs.msg import ExperimentalTensor
 
-# numpy dtype string -> TensorList data_type enum value.
-# Values from isaac_ros_tensor_list_interfaces/msg/Tensor.msg.
-DTYPE_TO_ENUM = {
-    'float32': 9,
-    'float64': 10,
-    'int32': 5,
-    'int64': 7,
+# numpy dtype string -> DLPack (code, bits). Lanes are scalar (1).
+DTYPE_TO_DLPACK = {
+    'float32': (2, 32),
+    'float64': (2, 64),
+    'int8': (0, 8),
+    'int16': (0, 16),
+    'int32': (0, 32),
+    'int64': (0, 64),
+    'uint8': (1, 8),
 }
 
 
-def make_tensor(name: str, data: np.ndarray) -> Tensor:
-    """Create a Tensor message from a numpy array."""
-    tensor = Tensor()
-    tensor.name = name
-    tensor.shape = TensorShape()
-    tensor.shape.rank = len(data.shape)
-    tensor.shape.dims = list(data.shape)
+def make_tensor(data: np.ndarray) -> ExperimentalTensor:
+    """Create a contiguous ExperimentalTensor message from a numpy array."""
+    tensor = ExperimentalTensor()
+    data = np.ascontiguousarray(data)
+    tensor.shape = list(data.shape)
     dtype_str = str(data.dtype)
-    if dtype_str not in DTYPE_TO_ENUM:
+    if dtype_str not in DTYPE_TO_DLPACK:
         raise ValueError(
             f"Unsupported numpy dtype '{dtype_str}' for TensorList message. "
-            f"Supported dtypes: {list(DTYPE_TO_ENUM.keys())}"
+            f'Supported dtypes: {list(DTYPE_TO_DLPACK.keys())}'
         )
-    tensor.data_type = DTYPE_TO_ENUM[dtype_str]
-    data = np.ascontiguousarray(data)
-    tensor.strides = list(data.strides)
+    tensor.dtype_code, tensor.dtype_bits = DTYPE_TO_DLPACK[dtype_str]
+    tensor.dtype_lanes = 1
+    # DLPack permits an empty stride vector for contiguous row-major tensors.
+    # This also avoids NumPy's noncanonical zero strides on size-one axes.
+    tensor.strides = []
+    tensor.byte_offset = 0
     tensor.data = data.tobytes()
     return tensor

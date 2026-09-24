@@ -46,9 +46,12 @@ class StateInterfaceAdapter
 public:
   /// Create adapter from input configurations.
   /// Looks up converters from the registry for each config.
+  /// @param joint_name_prefix Prefix applied to joint element names when resolving hardware
+  /// state interfaces. Tensor metadata retains the exported names.
   /// @throws std::runtime_error if no converter found for a config's kind.
   explicit StateInterfaceAdapter(
-    const std::vector<isaac_deploy_core::InputTermConfig> & configs);
+    const std::vector<isaac_deploy_core::InputTermConfig> & configs,
+    const std::string & joint_name_prefix = "");
 
   /// Get list of required state interface names based on configured inputs.
   std::vector<std::string> get_required_state_interfaces() const;

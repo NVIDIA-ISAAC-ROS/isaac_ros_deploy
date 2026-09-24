@@ -24,8 +24,29 @@
 namespace isaac_ros_deploy_ros2_control
 {
 
+namespace
+{
+
+std::vector<std::vector<std::string>> hardware_element_names(
+  const isaac_deploy_core::InputTermConfig & config,
+  const std::string & joint_name_prefix)
+{
+  auto names = config.element_names;
+  if (joint_name_prefix.empty() || !config.kind.starts_with("state/joint/") || names.empty()) {
+    return names;
+  }
+
+  for (auto & name : names.back()) {
+    name = joint_name_prefix + name;
+  }
+  return names;
+}
+
+}  // namespace
+
 StateInterfaceAdapter::StateInterfaceAdapter(
-  const std::vector<isaac_deploy_core::InputTermConfig> & configs)
+  const std::vector<isaac_deploy_core::InputTermConfig> & configs,
+  const std::string & joint_name_prefix)
 {
   auto & registry = StateInterfaceConverterRegistry::instance();
 
@@ -39,7 +60,8 @@ StateInterfaceAdapter::StateInterfaceAdapter(
       {
         .config = config,
         .converter = converter,
-        .interface_names = converter->get_required_state_interfaces(config.element_names),
+        .interface_names = converter->get_required_state_interfaces(
+          hardware_element_names(config, joint_name_prefix)),
       });
   }
 }

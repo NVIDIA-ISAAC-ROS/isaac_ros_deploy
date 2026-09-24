@@ -51,6 +51,7 @@ GANTRY_SERVICE = "/virtual_gantry/set_gantry_enabled"
 # Multi-reset configuration.
 RESET_COUNT = 4
 RESET_SPACING_S = 0.15
+INITIAL_TF_WAIT_S = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +271,32 @@ def monitor_height(
     tf_buffer = tf2_ros.Buffer()
     tf_listener = tf2_ros.TransformListener(tf_buffer, node)  # noqa: F841
 
+    node.get_logger().info(f"Waiting for initial world->{root_frame} TF...")
+    initial_tf_future = tf_buffer.wait_for_transform_async(
+        "world",
+        root_frame,
+        rclpy.time.Time(),
+    )
+    rclpy.spin_until_future_complete(
+        node,
+        initial_tf_future,
+        timeout_sec=INITIAL_TF_WAIT_S,
+    )
+
+    if not initial_tf_future.done():
+        try:
+            tf_buffer.lookup_transform("world", root_frame, rclpy.time.Time())
+        except tf2_ros.TransformException as exc:
+            test_case.fail(
+                f"No initial world->{root_frame} TF received within "
+                f"{INITIAL_TF_WAIT_S}s; last error: {exc}"
+            )
+        test_case.fail(
+            f"No initial world->{root_frame} TF received within {INITIAL_TF_WAIT_S}s"
+        )
+
     min_height = float("inf")
+    last_tf_error = None
     start = node.get_clock().now()
     test_duration = Duration(seconds=duration_s)
 
@@ -294,14 +320,16 @@ def monitor_height(
                     f"Robot fell! Height {height:.3f}m < {MIN_ROOT_HEIGHT_M}m threshold"
                 )
 
-        except tf2_ros.TransformException:
+        except tf2_ros.TransformException as exc:
+            last_tf_error = exc
             continue
 
     node.get_logger().info(f"Height monitoring complete. Min height: {min_height:.3f}m")
 
     test_case.assertTrue(
         math.isfinite(min_height),
-        "No valid height readings received - TF lookup failed throughout the test",
+        "No valid height readings received - TF lookup failed throughout the test; "
+        f"last error: {last_tf_error}",
     )
     test_case.assertGreater(
         min_height,

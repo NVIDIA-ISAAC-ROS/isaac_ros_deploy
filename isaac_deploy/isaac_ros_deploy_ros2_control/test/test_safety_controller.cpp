@@ -60,6 +60,24 @@ out_of_domain_detection:
     EXPECT_DOUBLE_EQ(velocity_threshold.mean_velocity, 2.0);
 }
 
+TEST(SafetyControllerConfigTest, CreateFromYamlParsesBlendReference) {
+    const auto yaml =
+    YAML::Load(
+      R"(
+blend_ratio:
+  type: interpolate
+  reference: current
+  max_velocities: [1.0, 2.0, 3.0]
+)");
+
+    auto result = SafetyControllerConfig::create_from_yaml(yaml);
+    ASSERT_TRUE(result.has_value());
+
+    EXPECT_EQ(result->blend_ratio.type, BlendStrategy::kInterpolate);
+    EXPECT_EQ(result->blend_ratio.reference, BlendReference::kCurrent);
+    ASSERT_EQ(result->blend_ratio.max_velocities.size(), 3u);
+}
+
 TEST(SafetyControllerTest, ActivateAndAdvance) {
     SafetyControllerConfig config {
     .blend_ratio = {.type = BlendStrategy::kInterpolate,

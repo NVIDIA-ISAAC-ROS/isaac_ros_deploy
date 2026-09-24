@@ -1,0 +1,92 @@
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+displayport_task_space:
+  controller_manager_name: /controller_manager
+  controller_manager_timeout_s: 10.0
+  inference_controller_name: displayport_task_space_inference_controller
+  safety_controller_name: displayport_task_space_safety_controller
+  start_inactive: true
+
+  # The LEAPP Deploy YAML should give each policy input a stable source:
+  #   eef_pos [1, 3] with kind state/body/position
+  #   eef_rot_6d [1, 6] with kind state/body/rotation_6d
+  #   socket_kp_pos [1, 3] with kind state/body/position
+  #   socket_kp_rot_6d [1, 6] with kind state/body/rotation_6d
+  #
+  # The socket arrives as geometry_msgs/PoseStamped and is converted to position
+  # plus row-major rotation 6D before inference.
+  socket_pose_topic: /displayport_socket_pose
+  socket_sources:
+    - socket_kp_pos
+    - socket_kp_rot_6d
+  socket_message_type: geometry_msgs/msg/PoseStamped
+
+  # The policy pose is read from the patched Flexiv ros2_control EEF state interfaces.
+  # Override these if the driver patch exposes different names.
+  eef_state_position_interfaces:
+    - eef/position.x
+    - eef/position.y
+    - eef/position.z
+  eef_state_orientation_interfaces:
+    - eef/orientation.x
+    - eef/orientation.y
+    - eef/orientation.z
+    - eef/orientation.w
+
+  # The final absolute Cartesian EEF target is written directly to the patched
+  # Flexiv ros2_control command interfaces.
+  eef_command_position_interfaces:
+    - eef/target_position.x
+    - eef/target_position.y
+    - eef/target_position.z
+  eef_command_orientation_interfaces:
+    - eef/target_orientation.x
+    - eef/target_orientation.y
+    - eef/target_orientation.z
+    - eef/target_orientation.w
+
+  arm_action_name: arm_action
+  current_observation_name: current_observation
+  input_interfaces:
+    eef_pos:
+      - eef/position.x
+      - eef/position.y
+      - eef/position.z
+    eef_rot_6d:
+      - eef/orientation.x
+      - eef/orientation.y
+      - eef/orientation.z
+      - eef/orientation.w
+  current_observation_reference_inputs:
+    eef_pos:
+      - position.x
+      - position.y
+      - position.z
+    eef_rot_6d:
+      - rotation_6d.r00
+      - rotation_6d.r01
+      - rotation_6d.r02
+      - rotation_6d.r10
+      - rotation_6d.r11
+      - rotation_6d.r12
+  action_element_names:
+    - delta_x
+    - delta_y
+    - delta_z
+    - delta_axis_angle_x
+    - delta_axis_angle_y
+    - delta_axis_angle_z
+
+  decimation: 1
+  topic_input_timeout_ms: 250.0
+  use_sim_time: false
+
+  # Only current_observation blending is implemented by the task-space safety controller.
+  # Use 1.0 for exact train/deploy policy action replay. Override at launch for damped tests.
+  blend_ratio: 1.0
+
+  publish_debug_topics: false
+  log_debug_to_console: false
+  debug_action_output_name: arm_action

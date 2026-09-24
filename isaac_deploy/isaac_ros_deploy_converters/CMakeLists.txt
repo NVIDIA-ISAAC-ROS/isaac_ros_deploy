@@ -31,8 +31,11 @@ find_package(isaac_deploy_core REQUIRED)
 
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(CUDAToolkit REQUIRED)
+find_package(cuda_buffer REQUIRED)
 find_package(isaac_ros_deploy_interfaces REQUIRED)
-find_package(isaac_ros_tensor_list_interfaces REQUIRED)
+find_package(isaac_ros_tensor_msgs REQUIRED)
+find_package(tensor_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -81,11 +84,14 @@ target_include_directories(tensor_list_utils PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(tensor_list_utils
+  cuda_buffer
   rclcpp
-  isaac_ros_tensor_list_interfaces
+  isaac_ros_tensor_msgs
+  tensor_msgs
   std_msgs
 )
 target_link_libraries(tensor_list_utils
+  CUDA::cudart
   isaac_deploy_core::types
   isaac_deploy_core::tensor_utils
   ${TORCH_LIBRARIES}
@@ -131,6 +137,8 @@ add_library(isaac_ros_deploy_converters_lib SHARED
   src/nodes/input_builder_node.cpp
   src/nodes/output_builder_node.cpp
   src/nodes/joint_command_to_joint_state_node.cpp
+  src/nodes/cartesian_pose_delta_command_builder_node.cpp
+  src/nodes/cartesian_pose_delta_decoder_node.cpp
 )
 target_include_directories(isaac_ros_deploy_converters_lib PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -140,8 +148,11 @@ ament_target_dependencies(isaac_ros_deploy_converters_lib
   rclcpp
   rclcpp_components
   isaac_ros_deploy_interfaces
-  isaac_ros_tensor_list_interfaces
+  isaac_ros_tensor_msgs
+  tensor_msgs
   sensor_msgs
+  geometry_msgs
+  std_msgs
 )
 target_link_libraries(isaac_ros_deploy_converters_lib
   converters
@@ -164,6 +175,8 @@ rclcpp_components_register_nodes(isaac_ros_deploy_converters_lib
   "isaac_ros_deploy_converters::InputBuilderNode"
   "isaac_ros_deploy_converters::OutputBuilderNode"
   "isaac_ros_deploy_converters::JointCommandToJointStateNode"
+  "isaac_ros_deploy_converters::CartesianPoseDeltaCommandBuilderNode"
+  "isaac_ros_deploy_converters::CartesianPoseDeltaDecoderNode"
 )
 
 # =============================================================================
@@ -173,6 +186,7 @@ rclcpp_components_register_nodes(isaac_ros_deploy_converters_lib
 add_executable(input_builder_node_exe src/nodes/input_builder_main.cpp)
 target_link_libraries(input_builder_node_exe isaac_ros_deploy_converters_lib)
 set_target_properties(input_builder_node_exe PROPERTIES
+  OUTPUT_NAME input_builder_node
   INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
 )
@@ -180,6 +194,7 @@ set_target_properties(input_builder_node_exe PROPERTIES
 add_executable(output_builder_node_exe src/nodes/output_builder_main.cpp)
 target_link_libraries(output_builder_node_exe isaac_ros_deploy_converters_lib)
 set_target_properties(output_builder_node_exe PROPERTIES
+  OUTPUT_NAME output_builder_node
   INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
 )
@@ -187,6 +202,32 @@ set_target_properties(output_builder_node_exe PROPERTIES
 add_executable(joint_command_to_joint_state_node src/nodes/joint_command_to_joint_state_main.cpp)
 target_link_libraries(joint_command_to_joint_state_node isaac_ros_deploy_converters_lib)
 set_target_properties(joint_command_to_joint_state_node PROPERTIES
+  INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+)
+
+add_executable(
+  cartesian_pose_delta_command_builder_node
+  src/nodes/cartesian_pose_delta_command_builder_main.cpp
+)
+target_link_libraries(
+  cartesian_pose_delta_command_builder_node
+  isaac_ros_deploy_converters_lib
+)
+set_target_properties(cartesian_pose_delta_command_builder_node PROPERTIES
+  INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+)
+
+add_executable(
+  cartesian_pose_delta_decoder_node
+  src/nodes/cartesian_pose_delta_decoder_main.cpp
+)
+target_link_libraries(
+  cartesian_pose_delta_decoder_node
+  isaac_ros_deploy_converters_lib
+)
+set_target_properties(cartesian_pose_delta_decoder_node PROPERTIES
   INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
 )
@@ -234,6 +275,8 @@ install(
     input_builder_node_exe
     output_builder_node_exe
     joint_command_to_joint_state_node
+    cartesian_pose_delta_command_builder_node
+    cartesian_pose_delta_decoder_node
     component_container
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
@@ -250,8 +293,10 @@ ament_export_dependencies(
   isaac_deploy_core
   rclcpp
   rclcpp_components
+  cuda_buffer
   isaac_ros_deploy_interfaces
-  isaac_ros_tensor_list_interfaces
+  isaac_ros_tensor_msgs
+  tensor_msgs
   sensor_msgs
   std_msgs
   geometry_msgs
@@ -295,6 +340,27 @@ if(BUILD_TESTING)
     isaac_ros_deploy_interfaces
   )
   set_target_properties(test_joint_command_trajectory_converter PROPERTIES
+    INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  )
+
+  ament_add_gtest(test_tensor_list_utils
+    test/test_tensor_list_utils.cpp
+  )
+  target_link_libraries(test_tensor_list_utils
+    tensor_list_utils
+    ${TORCH_LIBRARIES}
+  )
+  target_include_directories(test_tensor_list_utils PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(test_tensor_list_utils
+    cuda_buffer
+    rclcpp
+    isaac_ros_tensor_msgs
+    tensor_msgs
+  )
+  set_target_properties(test_tensor_list_utils PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )

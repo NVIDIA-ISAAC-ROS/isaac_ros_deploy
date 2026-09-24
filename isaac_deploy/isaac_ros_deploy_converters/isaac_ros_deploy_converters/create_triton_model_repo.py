@@ -35,25 +35,24 @@ This creates a directory layout like this:
 import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
-import shutil
 
 import onnx
 import yaml
 
 # Mapping from LEAPP dtype strings to Triton data type strings.
 DTYPE_TO_TRITON = {
-    "float32": "TYPE_FP32",
-    "float64": "TYPE_FP64",
-    "float16": "TYPE_FP16",
-    "int8": "TYPE_INT8",
-    "int16": "TYPE_INT16",
-    "int32": "TYPE_INT32",
-    "int64": "TYPE_INT64",
-    "uint8": "TYPE_UINT8",
-    "uint16": "TYPE_UINT16",
-    "uint32": "TYPE_UINT32",
-    "uint64": "TYPE_UINT64",
-    "bool": "TYPE_BOOL",
+    'float32': 'TYPE_FP32',
+    'float64': 'TYPE_FP64',
+    'float16': 'TYPE_FP16',
+    'int8': 'TYPE_INT8',
+    'int16': 'TYPE_INT16',
+    'int32': 'TYPE_INT32',
+    'int64': 'TYPE_INT64',
+    'uint8': 'TYPE_UINT8',
+    'uint16': 'TYPE_UINT16',
+    'uint32': 'TYPE_UINT32',
+    'uint64': 'TYPE_UINT64',
+    'bool': 'TYPE_BOOL',
 }
 
 _TENSOR_BLOCK_TEMPLATE = """\
@@ -91,15 +90,15 @@ def _generate_ensemble_config(
         dims = list(shape)
         if dynamic_batch:
             dims[0] = -1
-        return ", ".join(str(d) for d in dims)
+        return ', '.join(str(d) for d in dims)
 
     def _blocks(direction: str, tensors: list[dict]) -> str:
-        return "".join(
+        return ''.join(
             _TENSOR_BLOCK_TEMPLATE.format(
                 direction=direction,
-                name=t["name"],
-                data_type=DTYPE_TO_TRITON.get(t.get("dtype", "float32"), "TYPE_FP32"),
-                dims=_format_dims(t["shape"]),
+                name=t['name'],
+                data_type=DTYPE_TO_TRITON.get(t.get('dtype', 'float32'), 'TYPE_FP32'),
+                dims=_format_dims(t['shape']),
             )
             for t in tensors
         )
@@ -107,32 +106,32 @@ def _generate_ensemble_config(
     header = (
         'name: "ensemble"\n'
         'platform: "ensemble"\n'
-        "max_batch_size: 0\n\n"
-        + _blocks("input", inputs)
-        + _blocks("output", outputs)
+        'max_batch_size: 0\n\n'
+        + _blocks('input', inputs)
+        + _blocks('output', outputs)
     )
 
     step_strs = []
     for step in steps:
         mappings = []
-        for key, value in step["input_map"].items():
+        for key, value in step['input_map'].items():
             mappings.append(
-                _MAP_ENTRY_TEMPLATE.format(map_type="input_map", key=key, value=value)
+                _MAP_ENTRY_TEMPLATE.format(map_type='input_map', key=key, value=value)
             )
-        for key, value in step["output_map"].items():
+        for key, value in step['output_map'].items():
             mappings.append(
-                _MAP_ENTRY_TEMPLATE.format(map_type="output_map", key=key, value=value)
+                _MAP_ENTRY_TEMPLATE.format(map_type='output_map', key=key, value=value)
             )
         step_strs.append(
             _STEP_TEMPLATE.format(
-                model_name=step["model_name"],
-                mappings="\n".join(mappings),
+                model_name=step['model_name'],
+                mappings='\n'.join(mappings),
             )
         )
 
     # Comma-separate step entries (protobuf text format requires this).
-    steps_body = ",\n".join(step_strs)
-    return header + f"ensemble_scheduling {{\n  step [\n{steps_body}\n  ]\n}}\n"
+    steps_body = ',\n'.join(step_strs)
+    return header + f'ensemble_scheduling {{\n  step [\n{steps_body}\n  ]\n}}\n'
 
 
 def _has_dynamic_batch(onnx_path: Path) -> bool:
@@ -169,58 +168,61 @@ def _generate_model_config(
         dims = list(shape)
         if dynamic_batch:
             dims[0] = -1
-        return ", ".join(str(d) for d in dims)
+        return ', '.join(str(d) for d in dims)
 
     def _blocks(direction: str, tensors: list[dict]) -> str:
-        return "".join(
+        return ''.join(
             _TENSOR_BLOCK_TEMPLATE.format(
                 direction=direction,
-                name=t["name"],
-                data_type=DTYPE_TO_TRITON.get(t.get("dtype", "float32"), "TYPE_FP32"),
-                dims=_format_dims(t["shape"]),
+                name=t['name'],
+                data_type=DTYPE_TO_TRITON.get(t.get('dtype', 'float32'), 'TYPE_FP32'),
+                dims=_format_dims(t['shape']),
             )
             for t in tensors
         )
 
-    instance_group = ""
+    # Pin GPU models to device 0, where TritonNode creates its stream and input buffers.
+    instance_group = 'instance_group [{ kind: KIND_GPU gpus: [0] }]\n\n'
     if use_cpu:
-        instance_group = "instance_group [{ kind: KIND_CPU }]\n\n"
+        instance_group = 'instance_group [{ kind: KIND_CPU }]\n\n'
 
     return (
         f'name: "{model_name}"\n'
         f'platform: "onnxruntime_onnx"\n'
-        f"max_batch_size: 0\n\n"
+        f'max_batch_size: 0\n\n'
         + instance_group
-        + _blocks("input", inputs)
-        + _blocks("output", outputs)
+        + _blocks('input', inputs)
+        + _blocks('output', outputs)
     )
 
 
 def _resolve_model_path(config_path: Path, model_cfg: dict) -> Path:
     """
-    Resolve the ONNX model path from a model config entry.
+    Locate the ONNX model path from a model config entry.
 
-    If the model_path is relative, it is resolved relative to the config file.
+    A relative model_path is joined to the config directory without resolving
+    symlinks. Bazel assembles separately fetched ONNX artifacts as sibling
+    symlinks, and external data discovery depends on preserving that view.
     """
-    model_path_str = model_cfg.get("parameters", {}).get("model_path", "")
+    model_path_str = model_cfg.get('parameters', {}).get('model_path', '')
     model_path = Path(model_path_str)
     if model_path_str and not model_path.is_absolute():
-        model_path = (config_path.parent / model_path).resolve()
+        model_path = config_path.parent / model_path
     return model_path
 
 
 def _validate_model_backend(model_name: str, model_cfg: dict) -> None:
     """Validate that a LEAPP model artifact can be served by this Triton converter."""
-    backend = model_cfg.get("parameters", {}).get("backend")
+    backend = model_cfg.get('parameters', {}).get('backend')
     if backend is None:
         raise ValueError(
-            f"Model '{model_name}' parameters.backend is missing. "
-            "Export the LEAPP graph with the ONNX backend."
+            f'Model "{model_name}" parameters.backend is missing. '
+            'Export the LEAPP graph with the ONNX backend.'
         )
-    if backend != "onnx":
+    if backend != 'onnx':
         raise ValueError(
             f"Model '{model_name}' backend '{backend}' is not supported by "
-            "create_triton_model_repo. Export the LEAPP graph with the ONNX backend."
+            'create_triton_model_repo. Export the LEAPP graph with the ONNX backend.'
         )
 
 
@@ -234,42 +236,49 @@ def _create_model_dir(
     """
     Create a single Triton model directory inside a repo.
 
-    Generates the config.pbtxt and copies the ONNX model file. If the ONNX
-    model uses a dynamic batch dimension, the first dim in config.pbtxt is
-    set to -1 (using YAML shapes for the non-batch dimensions).
+    Generates the config.pbtxt and symlinks the ONNX artifacts. If the
+    ONNX model uses a dynamic batch dimension, the first dim in config.pbtxt
+    is set to -1 (using YAML shapes for the non-batch dimensions).
 
     Returns True if the ONNX model uses dynamic batch dimensions.
     """
-    model_cfg = config["models"][model_name]
+    model_cfg = config['models'][model_name]
 
     onnx_model_path = _resolve_model_path(config_path, model_cfg)
     if not onnx_model_path.exists():
-        raise FileNotFoundError(f"ONNX model not found: {onnx_model_path}")
+        raise FileNotFoundError(f'ONNX model not found: {onnx_model_path}')
 
     model_dir = output_dir / model_name
-    version_dir = model_dir / "1"
+    version_dir = model_dir / '1'
     version_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(onnx_model_path, version_dir / "model.onnx")
 
-    # Symlink any ONNX external data files (e.g. model.onnx.data) into the
-    # version directory so that the ONNX runtime can find them next to the
-    # copied model.onnx.
-    for data_file in onnx_model_path.parent.glob(f"{onnx_model_path.name}.*"):
-        dest = version_dir / data_file.name
-        if dest.is_symlink():
-            dest.unlink()
-        if not dest.exists():
-            dest.symlink_to(data_file.resolve())
+    def _symlink_artifact(source: Path, destination: Path) -> None:
+        if destination.exists() or destination.is_symlink():
+            destination.unlink()
+        try:
+            destination.symlink_to(source.resolve())
+        except OSError as error:
+            raise RuntimeError(
+                f"Cannot symlink ONNX artifact '{source}' into Triton model "
+                f"directory '{version_dir}'; refusing to copy model data."
+            ) from error
+
+    _symlink_artifact(onnx_model_path, version_dir / 'model.onnx')
+
+    # Triton 2.69 / ONNX Runtime 1.24 accepts external model data through this
+    # zero-copy sibling-symlink layout.
+    for data_file in onnx_model_path.parent.glob(f'{onnx_model_path.name}.*'):
+        _symlink_artifact(data_file, version_dir / data_file.name)
 
     dynamic_batch = _has_dynamic_batch(onnx_model_path)
     config_pbtxt = _generate_model_config(
         model_name,
-        model_cfg.get("inputs", []),
-        model_cfg.get("outputs", []),
+        model_cfg.get('inputs', []),
+        model_cfg.get('outputs', []),
         dynamic_batch,
         use_cpu=use_cpu,
     )
-    (model_dir / "config.pbtxt").write_text(config_pbtxt)
+    (model_dir / 'config.pbtxt').write_text(config_pbtxt)
 
     return dynamic_batch
 
@@ -319,17 +328,17 @@ def create_triton_model_repo(
     names.
     """
     config = yaml.safe_load(config_path.read_text())
-    if "models" not in config:
+    if 'models' not in config:
         raise ValueError(
             f"Config file {config_path} is missing required 'models' section"
         )
-    models = config["models"]
-    pipeline = config.get("pipeline", {})
+    models = config['models']
+    pipeline = config.get('pipeline', {})
     cpu_models = cpu_models or set()
     unknown_cpu_models = cpu_models - set(models)
     if unknown_cpu_models:
-        unknown = ", ".join(sorted(unknown_cpu_models))
-        raise ValueError(f"CPU model(s) not found in LEAPP config: {unknown}")
+        unknown = ', '.join(sorted(unknown_cpu_models))
+        raise ValueError(f'CPU model(s) not found in LEAPP config: {unknown}')
 
     # Create per-model ONNX repos with config.pbtxt.
     dynamic_batch = False
@@ -345,10 +354,10 @@ def create_triton_model_repo(
             dynamic_batch = True
 
     # Parse pipeline connectivity.
-    graph_inputs = pipeline.get("inputs", {})
-    graph_outputs = pipeline.get("outputs", {})
-    feedback_flow = pipeline.get("feedback_flow", {})
-    data_flow = pipeline.get("data_flow", {})
+    graph_inputs = pipeline.get('inputs', {})
+    graph_outputs = pipeline.get('outputs', {})
+    feedback_flow = pipeline.get('feedback_flow', {})
+    data_flow = pipeline.get('data_flow', {})
 
     # Build name sets.
     graph_input_names = {
@@ -358,12 +367,12 @@ def create_triton_model_repo(
         name for names in graph_outputs.values() for name in names
     }
     feedback_target_names = {
-        t.split("/", 1)[1]
+        t.split('/', 1)[1]
         for targets in feedback_flow.values()
         for t in targets
     }
     feedback_source_names = {
-        key.split("/", 1)[1] for key in feedback_flow
+        key.split('/', 1)[1] for key in feedback_flow
     }
 
     # Determine ensemble tensor names for data-flow connections.
@@ -372,11 +381,11 @@ def create_triton_model_repo(
     data_flow_tensor_names: dict[str, str] = {}
     data_flow_target_to_tensor: dict[str, str] = {}
     for source_key, targets in data_flow.items():
-        source_name = source_key.split("/", 1)[1]
+        source_name = source_key.split('/', 1)[1]
         if source_name in graph_output_names or source_name in feedback_source_names:
             tensor_name = source_name
         else:
-            tensor_name = f"_internal_{source_name}"
+            tensor_name = f'_internal_{source_name}'
         data_flow_tensor_names[source_key] = tensor_name
         for t in targets:
             data_flow_target_to_tensor[t] = tensor_name
@@ -388,15 +397,15 @@ def create_triton_model_repo(
     ensemble_output_names: list[str] = []
 
     for model_name, model_cfg in models.items():
-        for inp in model_cfg.get("inputs", []):
-            name = inp["name"]
+        for inp in model_cfg.get('inputs', []):
+            name = inp['name']
             if name in graph_input_names or name in feedback_target_names:
                 if name not in ensemble_input_names:
                     ensemble_inputs.append(inp)
                     ensemble_input_names.append(name)
 
-        for out in model_cfg.get("outputs", []):
-            name = out["name"]
+        for out in model_cfg.get('outputs', []):
+            name = out['name']
             if name in graph_output_names or name in feedback_source_names:
                 if name not in ensemble_output_names:
                     ensemble_outputs.append(out)
@@ -408,7 +417,7 @@ def create_triton_model_repo(
     # an action output [1,30,7]), prefix the ensemble input binding name.
     collision_names = set(ensemble_input_names) & set(ensemble_output_names)
     input_rename: dict[str, str] = {
-        name: f"_in_{name}" for name in collision_names
+        name: f'_in_{name}' for name in collision_names
     }
 
     if input_rename:
@@ -416,8 +425,8 @@ def create_triton_model_repo(
         # Use shallow copies to avoid mutating the original model config dicts.
         ensemble_inputs = [dict(inp) for inp in ensemble_inputs]
         for inp_tensor in ensemble_inputs:
-            if inp_tensor["name"] in input_rename:
-                inp_tensor["name"] = input_rename[inp_tensor["name"]]
+            if inp_tensor['name'] in input_rename:
+                inp_tensor['name'] = input_rename[inp_tensor['name']]
 
     # Build ensemble steps.
     # Triton ensemble input_map/output_map convention:
@@ -425,33 +434,33 @@ def create_triton_model_repo(
     steps: list[dict] = []
     for model_name, model_cfg in models.items():
         input_map = {}
-        for inp in model_cfg.get("inputs", []):
+        for inp in model_cfg.get('inputs', []):
             ensemble_tensor = data_flow_target_to_tensor.get(
-                f"{model_name}/{inp['name']}", inp["name"],
+                f"{model_name}/{inp['name']}", inp['name'],
             )
             # Apply input rename if the ensemble tensor was a colliding input.
             ensemble_tensor = input_rename.get(ensemble_tensor, ensemble_tensor)
-            input_map[inp["name"]] = ensemble_tensor
+            input_map[inp['name']] = ensemble_tensor
 
         output_map = {
-            out["name"]: data_flow_tensor_names.get(
-                f"{model_name}/{out['name']}", out["name"],
+            out['name']: data_flow_tensor_names.get(
+                f"{model_name}/{out['name']}", out['name'],
             )
-            for out in model_cfg.get("outputs", [])
+            for out in model_cfg.get('outputs', [])
         }
         steps.append({
-            "model_name": model_name,
-            "input_map": input_map,
-            "output_map": output_map,
+            'model_name': model_name,
+            'input_map': input_map,
+            'output_map': output_map,
         })
 
     # Generate and write ensemble config.pbtxt.
     config_pbtxt = _generate_ensemble_config(
         ensemble_inputs, ensemble_outputs, steps, dynamic_batch,
     )
-    ensemble_dir = output_dir / "ensemble"
-    (ensemble_dir / "1").mkdir(parents=True, exist_ok=True)
-    (ensemble_dir / "config.pbtxt").write_text(config_pbtxt)
+    ensemble_dir = output_dir / 'ensemble'
+    (ensemble_dir / '1').mkdir(parents=True, exist_ok=True)
+    (ensemble_dir / 'config.pbtxt').write_text(config_pbtxt)
 
     # Build binding names (with renames applied for collisions).
     input_binding_names = [
@@ -459,7 +468,7 @@ def create_triton_model_repo(
     ]
 
     return TritonRepoResult(
-        model_name="ensemble",
+        model_name='ensemble',
         input_tensor_names=ensemble_input_names,
         input_binding_names=input_binding_names,
         output_tensor_names=ensemble_output_names,
@@ -470,31 +479,31 @@ def create_triton_model_repo(
 def main():
     """CLI entry point for creating a Triton ensemble model repository."""
     parser = argparse.ArgumentParser(
-        description="Create a Triton ensemble model repository from a YAML config.",
+        description='Create a Triton ensemble model repository from a YAML config.',
     )
     parser.add_argument(
-        "config_path",
+        'config_path',
         type=Path,
-        help="Path to the YAML configuration file.",
+        help='Path to the YAML configuration file.',
     )
     parser.add_argument(
-        "--output-dir",
+        '--output-dir',
         default=None,
         type=Path,
-        help="Directory for the model repository. If not specified, creates next to the config.",
+        help='Directory for the model repository. If not specified, creates next to the config.',
     )
     args = parser.parse_args()
 
-    output_dir = args.output_dir or args.config_path.parent / "model_repo"
+    output_dir = args.output_dir or args.config_path.parent / 'model_repo'
     result = create_triton_model_repo(args.config_path, output_dir)
 
-    print(f"Created Triton model repository at: {output_dir}")
-    print(f"  Model: {result.model_name}")
-    print(f"  Input tensors: {result.input_tensor_names}")
-    print(f"  Input bindings: {result.input_binding_names}")
-    print(f"  Output tensors: {result.output_tensor_names}")
-    print(f"  Output bindings: {result.output_binding_names}")
+    print(f'Created Triton model repository at: {output_dir}')
+    print(f'  Model: {result.model_name}')
+    print(f'  Input tensors: {result.input_tensor_names}')
+    print(f'  Input bindings: {result.input_binding_names}')
+    print(f'  Output tensors: {result.output_tensor_names}')
+    print(f'  Output bindings: {result.output_binding_names}')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

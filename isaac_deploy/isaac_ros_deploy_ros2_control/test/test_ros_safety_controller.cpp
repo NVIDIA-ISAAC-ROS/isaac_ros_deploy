@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -23,6 +24,7 @@
 #include <vector>
 
 #include <controller_interface/chainable_controller_interface.hpp>
+#include <controller_interface/controller_interface_params.hpp>
 #include <controller_manager_msgs/srv/switch_controller.hpp>
 #include <rclcpp/rclcpp.hpp>
 
@@ -33,6 +35,22 @@
 #include "isaac_ros_deploy_ros2_control/utils/gain_utils.hpp"
 
 using isaac_ros_deploy_ros2_control::controllers::SafetyController;
+
+namespace
+{
+
+controller_interface::ControllerInterfaceParams make_controller_params(
+  const rclcpp::NodeOptions & options)
+{
+  controller_interface::ControllerInterfaceParams params;
+  params.controller_name = "test_safety_controller";
+  params.controller_manager_update_rate = 100;
+  params.update_rate = 100;
+  params.node_options = options;
+  return params;
+}
+
+}  // namespace
 
 namespace isaac_ros_deploy_ros2_control
 {
@@ -67,6 +85,11 @@ public:
     return controller.excluded_joint_patterns_;
   }
 
+  static std::vector<std::string> & hardware_command_interfaces(SafetyController & controller)
+  {
+    return controller.hardware_command_interfaces_;
+  }
+
   static std::vector<size_t> & excluded_joint_indices(SafetyController & controller)
   {
     return controller.excluded_joint_indices_;
@@ -91,6 +114,21 @@ public:
   static std::vector<isaac_deploy_core::TensorSpec> & input_specs(SafetyController & controller)
   {
     return controller.input_specs_;
+  }
+
+  static std::vector<double> & reference_interfaces(SafetyController & controller)
+  {
+    return controller.reference_interfaces_;
+  }
+
+  static bool stale_position_hold_active(const SafetyController & controller)
+  {
+    return controller.stale_position_hold_active_;
+  }
+
+  static void populate_position_commands_from_references(SafetyController & controller)
+  {
+    controller.populate_position_commands_from_references();
   }
 
   static std::string & emergency_controller(SafetyController & controller)
@@ -149,7 +187,87 @@ public:
 
 using isaac_ros_deploy_ros2_control::controllers::SafetyControllerTestAccess;
 
-TEST(RosSafetyControllerTest, StateInterfacesRequestOnlyPositionsWhenVelocityThresholdDisabled)
+class SafetyControllerConfigurationTest : public ::testing::Test
+{
+protected:
+  static void SetUpTestSuite()
+  {
+    rclcpp::init(0, nullptr);
+  }
+
+  static void TearDownTestSuite()
+  {
+    rclcpp::shutdown();
+  }
+
+  void SetUp() override
+  {
+    controller_ = std::make_unique<SafetyController>();
+    ASSERT_EQ(
+      controller_->init(
+        make_controller_params(
+          rclcpp::NodeOptions()
+          .allow_undeclared_parameters(true)
+          .automatically_declare_parameters_from_overrides(true))),
+      controller_interface::return_type::OK);
+    controller_->get_node()->set_parameter(
+      rclcpp::Parameter("joints", std::vector<std::string>{"joint_a", "joint_b"}));
+  }
+
+  controller_interface::CallbackReturn configure_with_interfaces(
+    const std::vector<std::string> & interfaces)
+  {
+    controller_->get_node()->set_parameter(
+      rclcpp::Parameter("hardware_command_interfaces", interfaces));
+    return controller_->on_configure(rclcpp_lifecycle::State());
+  }
+
+  std::unique_ptr<SafetyController> controller_;
+};
+
+TEST_F(SafetyControllerConfigurationTest, RejectsEmptyHardwareCommandInterfaces)
+{
+  EXPECT_EQ(
+    configure_with_interfaces({}),
+    controller_interface::CallbackReturn::ERROR);
+}
+
+TEST_F(SafetyControllerConfigurationTest, RejectsUnsupportedHardwareCommandInterface)
+{
+  EXPECT_EQ(
+    configure_with_interfaces({"position", "invalid_interface"}),
+    controller_interface::CallbackReturn::ERROR);
+}
+
+TEST_F(SafetyControllerConfigurationTest, RejectsDuplicateHardwareCommandInterface)
+{
+  EXPECT_EQ(
+    configure_with_interfaces({"position", "position"}),
+    controller_interface::CallbackReturn::ERROR);
+}
+
+TEST_F(SafetyControllerConfigurationTest, RejectsHardwareCommandInterfacesWithoutPosition)
+{
+  EXPECT_EQ(
+    configure_with_interfaces({"velocity"}),
+    controller_interface::CallbackReturn::ERROR);
+}
+
+class RosSafetyControllerTest : public ::testing::Test
+{
+protected:
+  static void SetUpTestSuite()
+  {
+    rclcpp::init(0, nullptr);
+  }
+
+  static void TearDownTestSuite()
+  {
+    rclcpp::shutdown();
+  }
+};
+
+TEST_F(RosSafetyControllerTest, StateInterfacesRequestOnlyPositionsWhenVelocityThresholdDisabled)
 {
   SafetyController controller;
   SafetyControllerTestAccess::joint_names(controller) = {"joint_a", "joint_b"};
@@ -162,7 +280,7 @@ TEST(RosSafetyControllerTest, StateInterfacesRequestOnlyPositionsWhenVelocityThr
   EXPECT_EQ(config.names[1], "joint_b/position");
 }
 
-TEST(RosSafetyControllerTest, CreateSafetyControllerOmitsVelocityInputWhenThresholdDisabled)
+TEST_F(RosSafetyControllerTest, CreateSafetyControllerOmitsVelocityInputWhenThresholdDisabled)
 {
   SafetyController controller;
   SafetyControllerTestAccess::joint_names(controller) = {"joint_a", "joint_b"};
@@ -176,7 +294,7 @@ TEST(RosSafetyControllerTest, CreateSafetyControllerOmitsVelocityInputWhenThresh
   EXPECT_EQ(SafetyControllerTestAccess::input_specs(controller).size(), 4u);
 }
 
-TEST(RosSafetyControllerTest, CreateSafetyControllerAddsVelocityInputWhenThresholdEnabled)
+TEST_F(RosSafetyControllerTest, CreateSafetyControllerAddsVelocityInputWhenThresholdEnabled)
 {
   SafetyController controller;
   SafetyControllerTestAccess::joint_names(controller) = {"joint_a", "joint_b"};
@@ -199,7 +317,7 @@ TEST(RosSafetyControllerTest, CreateSafetyControllerAddsVelocityInputWhenThresho
   EXPECT_EQ(SafetyControllerTestAccess::inputs(controller)[velocity_input_index].tensor.size(1), 2);
 }
 
-TEST(RosSafetyControllerTest, ResolveExcludedJointIndicesSortsAndDeduplicates)
+TEST_F(RosSafetyControllerTest, ResolveExcludedJointIndicesSortsAndDeduplicates)
 {
   SafetyController controller;
   SafetyControllerTestAccess::joint_names(controller) = {
@@ -217,7 +335,7 @@ TEST(RosSafetyControllerTest, ResolveExcludedJointIndicesSortsAndDeduplicates)
   EXPECT_EQ(SafetyControllerTestAccess::excluded_joint_indices(controller)[1], 2u);
 }
 
-TEST(RosSafetyControllerTest, StateInterfacesRequestVelocitiesWhenVelocityThresholdEnabled)
+TEST_F(RosSafetyControllerTest, StateInterfacesRequestVelocitiesWhenVelocityThresholdEnabled)
 {
   SafetyController controller;
   SafetyControllerTestAccess::joint_names(controller) = {"joint_a", "joint_b"};
@@ -232,7 +350,87 @@ TEST(RosSafetyControllerTest, StateInterfacesRequestVelocitiesWhenVelocityThresh
   EXPECT_EQ(config.names[3], "joint_b/velocity");
 }
 
-TEST(RosSafetyControllerTest, LatchEmergencyKeepsFirstReasonAndDoesNotMarkSecondSwitchPending)
+TEST_F(RosSafetyControllerTest, CommandInterfacesRequestFullSetByDefault)
+{
+  // Preserve the full default interface set for backward compatibility.
+  SafetyController controller;
+  SafetyControllerTestAccess::joint_names(controller) = {"joint_a", "joint_b"};
+
+  const auto config = controller.command_interface_configuration();
+  ASSERT_EQ(config.type, controller_interface::interface_configuration_type::INDIVIDUAL);
+  ASSERT_EQ(config.names.size(), 10u);
+  EXPECT_EQ(config.names[0], "joint_a/position");
+  EXPECT_EQ(config.names[1], "joint_a/velocity");
+  EXPECT_EQ(config.names[2], "joint_a/effort");
+  EXPECT_EQ(config.names[3], "joint_a/kp");
+  EXPECT_EQ(config.names[4], "joint_a/kd");
+  EXPECT_EQ(config.names[5], "joint_b/position");
+  EXPECT_EQ(config.names[6], "joint_b/velocity");
+  EXPECT_EQ(config.names[7], "joint_b/effort");
+  EXPECT_EQ(config.names[8], "joint_b/kp");
+  EXPECT_EQ(config.names[9], "joint_b/kd");
+}
+
+TEST_F(RosSafetyControllerTest, CommandInterfacesCanRequestOnlyPositions)
+{
+  SafetyController controller;
+  SafetyControllerTestAccess::joint_names(controller) = {"joint_a", "joint_b"};
+  SafetyControllerTestAccess::hardware_command_interfaces(controller) = {"position"};
+
+  const auto config = controller.command_interface_configuration();
+  ASSERT_EQ(config.type, controller_interface::interface_configuration_type::INDIVIDUAL);
+  ASSERT_EQ(config.names.size(), 2u);
+  EXPECT_EQ(config.names[0], "joint_a/position");
+  EXPECT_EQ(config.names[1], "joint_b/position");
+}
+
+TEST_F(RosSafetyControllerTest, InvalidPositionReferencesHoldStaleEntryMeasurements)
+{
+  SafetyController controller;
+  // create_safety_controller reads ROS params via get_node().
+  ASSERT_EQ(
+    controller.init(
+      make_controller_params(
+        rclcpp::NodeOptions()
+        .allow_undeclared_parameters(true)
+        .automatically_declare_parameters_from_overrides(true))),
+    controller_interface::return_type::OK);
+
+  controller.get_node()->set_parameter(
+    rclcpp::Parameter("joints", std::vector<std::string>{"joint_a", "joint_b"}));
+
+  // Configure creates the tensors and reference buffers.
+  ASSERT_EQ(
+    controller.on_configure(rclcpp_lifecycle::State()),
+    controller_interface::CallbackReturn::SUCCESS);
+
+  auto & references = SafetyControllerTestAccess::reference_interfaces(controller);
+  references.assign(10, 0.0);
+  references[0] = std::numeric_limits<double>::quiet_NaN();
+  references[5] = std::numeric_limits<double>::quiet_NaN();
+
+  auto & inputs = SafetyControllerTestAccess::inputs(controller);
+  inputs[1].tensor.copy_(torch::tensor({{0.08F, -0.12F}}));
+  SafetyControllerTestAccess::populate_position_commands_from_references(controller);
+
+  EXPECT_TRUE(SafetyControllerTestAccess::stale_position_hold_active(controller));
+  EXPECT_TRUE(torch::allclose(inputs[0].tensor, torch::tensor({{0.08F, -0.12F}})));
+
+  inputs[1].tensor.copy_(torch::tensor({{0.04F, -0.20F}}));
+  SafetyControllerTestAccess::populate_position_commands_from_references(controller);
+
+  EXPECT_TRUE(SafetyControllerTestAccess::stale_position_hold_active(controller));
+  EXPECT_TRUE(torch::allclose(inputs[0].tensor, torch::tensor({{0.08F, -0.12F}})));
+
+  references[0] = 0.3;
+  references[5] = -0.4;
+  SafetyControllerTestAccess::populate_position_commands_from_references(controller);
+
+  EXPECT_FALSE(SafetyControllerTestAccess::stale_position_hold_active(controller));
+  EXPECT_TRUE(torch::allclose(inputs[0].tensor, torch::tensor({{0.3F, -0.4F}})));
+}
+
+TEST_F(RosSafetyControllerTest, LatchEmergencyKeepsFirstReasonAndDoesNotMarkSecondSwitchPending)
 {
   SafetyController controller;
   SafetyControllerTestAccess::emergency_controller(controller) = "freeze_controller";
@@ -254,7 +452,7 @@ TEST(RosSafetyControllerTest, LatchEmergencyKeepsFirstReasonAndDoesNotMarkSecond
   EXPECT_FALSE(SafetyControllerTestAccess::emergency_switch_client(controller).in_flight());
 }
 
-TEST(RosSafetyControllerTest, BuildEmergencySwitchRequestActivatesEmergencyController)
+TEST_F(RosSafetyControllerTest, BuildEmergencySwitchRequestActivatesEmergencyController)
 {
   SafetyController controller;
   SafetyControllerTestAccess::emergency_controller(controller) = "freeze_controller";
@@ -273,7 +471,7 @@ TEST(RosSafetyControllerTest, BuildEmergencySwitchRequestActivatesEmergencyContr
   EXPECT_EQ(request.timeout.nanosec, 250000000u);
 }
 
-TEST(RosSafetyControllerTest, BuildEmergencySwitchRequestUsesConfiguredDeactivateControllers)
+TEST_F(RosSafetyControllerTest, BuildEmergencySwitchRequestUsesConfiguredDeactivateControllers)
 {
   SafetyController controller;
   SafetyControllerTestAccess::emergency_controller(controller) = "freeze_controller";
@@ -296,7 +494,7 @@ TEST(RosSafetyControllerTest, BuildEmergencySwitchRequestUsesConfiguredDeactivat
     controller_manager_msgs::srv::SwitchController::Request::BEST_EFFORT);
 }
 
-TEST(RosSafetyControllerTest, RealtimeServiceClientTriggerOnceLatchesAndMarksPending)
+TEST_F(RosSafetyControllerTest, RealtimeServiceClientTriggerOnceLatchesAndMarksPending)
 {
   isaac_ros_deploy_ros2_control::utils::RealtimeServiceClient<
     controller_manager_msgs::srv::SwitchController> client;

@@ -17,11 +17,13 @@
 #include "isaac_ros_deploy_ros2_control/controllers/safety_controller.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <regex>
+#include <string_view>
 
 #include "isaac_ros_deploy_ros2_control/utils/gain_utils.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/tensor_interface_utils.hpp"
@@ -50,6 +52,18 @@ std::optional<isaac_deploy_core::BlendStrategy> parse_blend_strategy(
   return std::nullopt;
 }
 
+std::optional<isaac_deploy_core::BlendReference> parse_blend_reference(
+  const std::string & reference)
+{
+  if (reference == "activation") {
+    return isaac_deploy_core::BlendReference::kActivation;
+  }
+  if (reference == "current") {
+    return isaac_deploy_core::BlendReference::kCurrent;
+  }
+  return std::nullopt;
+}
+
 const char * to_string(isaac_deploy_core::BlendStrategy type)
 {
   switch (type) {
@@ -61,10 +75,39 @@ const char * to_string(isaac_deploy_core::BlendStrategy type)
   return "unknown";
 }
 
+const char * to_string(isaac_deploy_core::BlendReference reference)
+{
+  switch (reference) {
+    case isaac_deploy_core::BlendReference::kActivation:
+      return "activation";
+    case isaac_deploy_core::BlendReference::kCurrent:
+      return "current";
+  }
+  return "unknown";
+}
+
 bool is_out_of_domain_detection_parameter(const std::string & name)
 {
   constexpr char kPrefix[] = "out_of_domain_detection.";
-  return name.rfind(kPrefix, 0) == 0;
+  return name.starts_with(kPrefix);
+}
+
+bool has_command_interface(
+  const std::vector<std::string> & command_interfaces,
+  const std::string & interface_name)
+{
+  return std::find(
+    command_interfaces.begin(), command_interfaces.end(), interface_name) !=
+         command_interfaces.end();
+}
+
+bool is_supported_hardware_command_interface(const std::string & interface_name)
+{
+  constexpr std::array<std::string_view, 5> kSupportedInterfaces{
+    "position", "velocity", "effort", "kp", "kd"};
+  return std::find(
+    kSupportedInterfaces.begin(), kSupportedInterfaces.end(), interface_name) !=
+         kSupportedInterfaces.end();
 }
 
 rclcpp::Logger get_logger_or_default(const SafetyController & controller)
@@ -130,11 +173,14 @@ controller_interface::CallbackReturn SafetyController::on_init()
 {
   try {
     auto_declare<std::string>("blend_strategy", "interpolate");
+    auto_declare<std::string>("blend_reference", "activation");
     // interpolate_max_velocity is a per-joint regex map (like kp/kd), resolved from
     // parameter overrides in create_safety_controller — not declared as a scalar here.
 
     // Joints
     auto_declare<std::vector<std::string>>("joints", std::vector<std::string>());
+    auto_declare<std::vector<std::string>>(
+      "hardware_command_interfaces", {"position", "velocity", "effort", "kp", "kd"});
 
     // Declare blend_ratio as a dynamic parameter with constraints for rqt_reconfigure
     rcl_interfaces::msg::ParameterDescriptor blend_ratio_desc;
@@ -146,7 +192,7 @@ controller_interface::CallbackReturn SafetyController::on_init()
     rcl_interfaces::msg::FloatingPointRange range;
     range.from_value = 0.0;
     range.to_value = 1.0;
-    range.step = 0.01;
+    range.step = 0.001;
     blend_ratio_desc.floating_point_range.push_back(range);
     get_node()->declare_parameter("blend_ratio", rclcpp::ParameterValue(0.0), blend_ratio_desc);
 
@@ -174,6 +220,11 @@ controller_interface::CallbackReturn SafetyController::on_init()
     auto_declare<std::vector<std::string>>(
       "out_of_domain_detection.deactivate_controllers",
       std::vector<std::string>());
+
+    auto_declare<bool>("publish_scaled_joint_delta", false);
+    auto_declare<std::string>("scaled_joint_delta_topic", "~/scaled_joint_delta");
+    auto_declare<bool>("publish_blended_command", false);
+    auto_declare<std::string>("blended_command_topic", "~/blended_command");
 
     // Gravity compensation: path to the (fixed-base) URDF used to build the Pinocchio
     // model, and the joints the gravity torque is applied to. Both must be set to
@@ -208,7 +259,22 @@ controller_interface::CallbackReturn SafetyController::on_configure(
     return controller_interface::CallbackReturn::ERROR;
   }
   blend_strategy_ = blend_strategy.value();
+
+  const auto blend_reference_str =
+    get_node()->get_parameter("blend_reference").as_string();
+  const auto blend_reference = parse_blend_reference(blend_reference_str);
+  if (!blend_reference.has_value()) {
+    RCLCPP_ERROR(
+      get_node()->get_logger(),
+      "Unknown blend_reference '%s'. Supported values: activation, current",
+      blend_reference_str.c_str());
+    return controller_interface::CallbackReturn::ERROR;
+  }
+  blend_reference_ = blend_reference.value();
+
   joint_names_ = get_node()->get_parameter("joints").as_string_array();
+  hardware_command_interfaces_ =
+    get_node()->get_parameter("hardware_command_interfaces").as_string_array();
   target_blend_ratio_.store(get_node()->get_parameter("blend_ratio").as_double());
   max_blend_ratio_speed_.store(get_node()->get_parameter("max_blend_ratio_speed").as_double());
   per_joint_kp_ = utils::resolve_gains_from_params(*get_node(), "kp", joint_names_);
@@ -231,8 +297,77 @@ controller_interface::CallbackReturn SafetyController::on_configure(
     return controller_interface::CallbackReturn::ERROR;
   }
 
+  if (hardware_command_interfaces_.empty()) {
+    RCLCPP_ERROR(get_node()->get_logger(), "No hardware_command_interfaces specified");
+    return controller_interface::CallbackReturn::ERROR;
+  }
+  for (size_t i = 0; i < hardware_command_interfaces_.size(); ++i) {
+    const auto & interface_name = hardware_command_interfaces_[i];
+    if (!is_supported_hardware_command_interface(interface_name)) {
+      RCLCPP_ERROR(
+        get_node()->get_logger(), "Unsupported hardware command interface '%s'",
+        interface_name.c_str());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    const auto first = std::find(
+      hardware_command_interfaces_.begin(), hardware_command_interfaces_.end(), interface_name);
+    if (static_cast<size_t>(std::distance(hardware_command_interfaces_.begin(), first)) != i) {
+      RCLCPP_ERROR(
+        get_node()->get_logger(), "Duplicate hardware command interface '%s'",
+        interface_name.c_str());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+  }
+  if (!has_command_interface(hardware_command_interfaces_, "position")) {
+    RCLCPP_ERROR(get_node()->get_logger(), "hardware_command_interfaces must include position");
+    return controller_interface::CallbackReturn::ERROR;
+  }
   load_out_of_domain_detection_params();
   resolve_excluded_joint_indices();
+
+  scaled_joint_delta_publisher_.reset();
+  scaled_joint_delta_realtime_publisher_.reset();
+  if (publish_scaled_joint_delta_) {
+    scaled_joint_delta_publisher_ = get_node()->create_publisher<JointCommandMsg>(
+      scaled_joint_delta_topic_, rclcpp::SystemDefaultsQoS());
+    scaled_joint_delta_realtime_publisher_ =
+      std::make_shared<JointCommandPublisher>(scaled_joint_delta_publisher_);
+
+    auto & msg = scaled_joint_delta_msg_;
+    msg.names = joint_names_;
+    msg.position.assign(joint_names_.size(), 0.0);
+    msg.velocity.assign(joint_names_.size(), 0.0);
+    msg.effort.assign(joint_names_.size(), 0.0);
+    msg.kp.assign(joint_names_.size(), 0.0);
+    msg.kd.assign(joint_names_.size(), 0.0);
+
+    RCLCPP_INFO(
+      get_node()->get_logger(),
+      "Publishing scaled SafetyController joint deltas on %s",
+      scaled_joint_delta_topic_.c_str());
+  }
+
+  blended_command_publisher_.reset();
+  blended_command_realtime_publisher_.reset();
+  if (publish_blended_command_) {
+    blended_command_publisher_ = get_node()->create_publisher<JointCommandMsg>(
+      blended_command_topic_, rclcpp::SystemDefaultsQoS());
+    blended_command_realtime_publisher_ =
+      std::make_shared<JointCommandPublisher>(blended_command_publisher_);
+
+    auto & msg = blended_command_msg_;
+    msg.names = joint_names_;
+    msg.position.assign(joint_names_.size(), 0.0);
+    msg.velocity.assign(joint_names_.size(), 0.0);
+    msg.effort.assign(joint_names_.size(), 0.0);
+    msg.kp.assign(joint_names_.size(), 0.0);
+    msg.kd.assign(joint_names_.size(), 0.0);
+
+    RCLCPP_INFO(
+      get_node()->get_logger(),
+      "Publishing blended SafetyController joint commands on %s",
+      blended_command_topic_.c_str());
+  }
 
   id_solver_.reset();
   gravity_apply_.assign(joint_names_.size(), false);
@@ -345,10 +480,17 @@ controller_interface::CallbackReturn SafetyController::on_configure(
 
   RCLCPP_INFO(
     get_node()->get_logger(),
-    "Configured SafetyController with %zu joints, blend_strategy: %s, blend_ratio: %.3f, "
-    "max_blend_ratio_speed: %.3f",
-    joint_names_.size(), to_string(blend_strategy_), target_blend_ratio_.load(),
-    max_blend_ratio_speed_.load());
+    "Configured SafetyController with %zu joints, blend_strategy: %s, "
+    "blend_reference: %s, blend_ratio: %.3f, max_blend_ratio_speed: %.3f",
+    joint_names_.size(), to_string(blend_strategy_), to_string(blend_reference_),
+    target_blend_ratio_.load(), max_blend_ratio_speed_.load());
+
+  RCLCPP_INFO(
+    get_node()->get_logger(),
+    "SafetyController out_of_domain velocity check: enabled=%s, emergency_controller='%s', "
+    "max_velocity=%.3f rad/s, mean_velocity=%.3f rad/s",
+    velocity_threshold_enabled_ ? "true" : "false", emergency_controller_.c_str(),
+    max_joint_velocity_, mean_joint_velocity_);
 
   return controller_interface::CallbackReturn::SUCCESS;
 }
@@ -371,6 +513,28 @@ void SafetyController::load_out_of_domain_detection_params()
     get_node()->get_parameter("out_of_domain_detection.switch_timeout").as_double();
   configured_emergency_deactivate_controllers_ =
     get_node()->get_parameter("out_of_domain_detection.deactivate_controllers").as_string_array();
+  publish_scaled_joint_delta_ =
+    get_node()->get_parameter("publish_scaled_joint_delta").as_bool();
+  scaled_joint_delta_topic_ =
+    get_node()->get_parameter("scaled_joint_delta_topic").as_string();
+  if (publish_scaled_joint_delta_ && scaled_joint_delta_topic_.empty()) {
+    RCLCPP_WARN(
+      get_node()->get_logger(),
+      "publish_scaled_joint_delta is true but scaled_joint_delta_topic is empty; "
+      "using ~/scaled_joint_delta");
+    scaled_joint_delta_topic_ = "~/scaled_joint_delta";
+  }
+  publish_blended_command_ =
+    get_node()->get_parameter("publish_blended_command").as_bool();
+  blended_command_topic_ =
+    get_node()->get_parameter("blended_command_topic").as_string();
+  if (publish_blended_command_ && blended_command_topic_.empty()) {
+    RCLCPP_WARN(
+      get_node()->get_logger(),
+      "publish_blended_command is true but blended_command_topic is empty; "
+      "using ~/blended_command");
+    blended_command_topic_ = "~/blended_command";
+  }
   velocity_threshold_enabled_ = !emergency_controller_.empty() &&
     (max_joint_velocity_ > 0.0 || mean_joint_velocity_ > 0.0);
 }
@@ -404,6 +568,7 @@ bool SafetyController::create_safety_controller()
   try {
     isaac_deploy_core::SafetyControllerConfig config;
     config.blend_ratio.type = blend_strategy_;
+    config.blend_ratio.reference = blend_reference_;
     if (blend_strategy_ == isaac_deploy_core::BlendStrategy::kInterpolate) {
       auto max_velocities = utils::resolve_gains_from_params(
         *get_node(), "interpolate_max_velocity", joint_names_);
@@ -475,6 +640,9 @@ bool SafetyController::create_safety_controller()
     outputs_.push_back(utils::create_preallocated_tensor("safe_positions", {1, num_joints}));
     output_specs_.push_back(utils::create_joint_tensor_spec(joint_names_));
 
+    stale_position_hold_.assign(joint_names_.size(), 0.0);
+    stale_position_hold_active_ = false;
+
     return true;
   } catch (const std::exception & e) {
     RCLCPP_ERROR(get_node()->get_logger(), "Failed to load config: %s", e.what());
@@ -488,13 +656,10 @@ SafetyController::command_interface_configuration() const
   controller_interface::InterfaceConfiguration config;
   config.type = controller_interface::interface_configuration_type::INDIVIDUAL;
 
-  // Request all command interfaces for all joints.
   for (const auto & joint_name : joint_names_) {
-    config.names.push_back(joint_name + "/position");
-    config.names.push_back(joint_name + "/velocity");
-    config.names.push_back(joint_name + "/effort");
-    config.names.push_back(joint_name + "/kp");
-    config.names.push_back(joint_name + "/kd");
+    for (const auto & interface_name : hardware_command_interfaces_) {
+      config.names.push_back(joint_name + "/" + interface_name);
+    }
   }
 
   return config;
@@ -644,43 +809,55 @@ controller_interface::CallbackReturn SafetyController::on_activate(
 
   // Initialize current blend ratio to target so there's no ramp on first activation
   current_blend_ratio_ = target_blend_ratio_.load();
+  stale_position_hold_active_ = false;
 
   RCLCPP_INFO(
     get_node()->get_logger(), "Using blend_ratio parameter, initial value: %.3f",
     target_blend_ratio_.load());
 
   // Cache command interface indices.
-  std::vector<std::string> cmd_pos_names, cmd_vel_names, cmd_eff_names, cmd_kp_names, cmd_kd_names;
-  cmd_pos_names.reserve(joint_names_.size());
-  cmd_vel_names.reserve(joint_names_.size());
-  cmd_eff_names.reserve(joint_names_.size());
-  cmd_kp_names.reserve(joint_names_.size());
-  cmd_kd_names.reserve(joint_names_.size());
+  auto command_names = [this](const std::string & interface_name) {
+      std::vector<std::string> names;
+      names.reserve(joint_names_.size());
+      for (const auto & joint_name : joint_names_) {
+        names.push_back(joint_name + "/" + interface_name);
+      }
+      return names;
+    };
+  auto cache_command_interfaces = [this, &command_names](
+    const std::string & interface_name, std::vector<size_t> & indices) {
+      if (!has_command_interface(hardware_command_interfaces_, interface_name)) {
+        indices.clear();
+        return true;
+      }
+      auto maybe_indices = utils::find_command_interface_indices(
+        command_names(interface_name), command_interfaces_);
+      if (!maybe_indices) {
+        RCLCPP_ERROR(
+          get_node()->get_logger(), "Failed to find %s command interfaces",
+          interface_name.c_str());
+        return false;
+      }
+      indices = std::move(maybe_indices.value());
+      return true;
+    };
 
-  for (const auto & name : joint_names_) {
-    cmd_pos_names.push_back(name + "/position");
-    cmd_vel_names.push_back(name + "/velocity");
-    cmd_eff_names.push_back(name + "/effort");
-    cmd_kp_names.push_back(name + "/kp");
-    cmd_kd_names.push_back(name + "/kd");
+  position_command_indices_.clear();
+  velocity_command_indices_.clear();
+  effort_command_indices_.clear();
+  kp_command_indices_.clear();
+  kd_command_indices_.clear();
+
+  const std::array<std::pair<const char *, std::vector<size_t> *>, 5> command_indices{
+    {{"position", &position_command_indices_}, {"velocity", &velocity_command_indices_},
+      {"effort", &effort_command_indices_}, {"kp", &kp_command_indices_},
+      {"kd", &kd_command_indices_}}};
+
+  for (const auto & [interface_name, indices] : command_indices) {
+    if (!cache_command_interfaces(interface_name, *indices)) {
+      return controller_interface::CallbackReturn::ERROR;
+    }
   }
-
-  auto maybe_cmd_pos = utils::find_command_interface_indices(cmd_pos_names, command_interfaces_);
-  auto maybe_cmd_vel = utils::find_command_interface_indices(cmd_vel_names, command_interfaces_);
-  auto maybe_cmd_eff = utils::find_command_interface_indices(cmd_eff_names, command_interfaces_);
-  auto maybe_cmd_kp = utils::find_command_interface_indices(cmd_kp_names, command_interfaces_);
-  auto maybe_cmd_kd = utils::find_command_interface_indices(cmd_kd_names, command_interfaces_);
-
-  if (!maybe_cmd_pos || !maybe_cmd_vel || !maybe_cmd_eff || !maybe_cmd_kp || !maybe_cmd_kd) {
-    RCLCPP_ERROR(get_node()->get_logger(), "Failed to find one or more command interfaces");
-    return controller_interface::CallbackReturn::ERROR;
-  }
-
-  position_command_indices_ = std::move(maybe_cmd_pos.value());
-  velocity_command_indices_ = std::move(maybe_cmd_vel.value());
-  effort_command_indices_ = std::move(maybe_cmd_eff.value());
-  kp_command_indices_ = std::move(maybe_cmd_kp.value());
-  kd_command_indices_ = std::move(maybe_cmd_kd.value());
 
   // Populate initial input values.
   int64_t timestamp_ns = 0;
@@ -721,6 +898,7 @@ controller_interface::CallbackReturn SafetyController::on_deactivate(
   effort_command_indices_.clear();
   kp_command_indices_.clear();
   kd_command_indices_.clear();
+  stale_position_hold_active_ = false;
 
   RCLCPP_INFO(get_node()->get_logger(), "SafetyController deactivated");
   return controller_interface::CallbackReturn::SUCCESS;
@@ -756,36 +934,46 @@ controller_interface::return_type SafetyController::update_and_write_commands(
   }
 
   // Write safe positions to command interfaces.
-  write_outputs_to_interfaces();
+  write_outputs_to_interfaces(time);
 
   return controller_interface::return_type::OK;
+}
+
+void SafetyController::populate_position_commands_from_references()
+{
+  bool has_invalid_position = false;
+  for (size_t i = 0; i < joint_names_.size(); ++i) {
+    if (std::isnan(reference_interfaces_[i * kInterfacesPerJoint])) {
+      has_invalid_position = true;
+      break;
+    }
+  }
+
+  const auto current_pos_accessor = inputs_[1].tensor.accessor<float, 2>();
+  if (has_invalid_position && !stale_position_hold_active_) {
+    for (size_t i = 0; i < joint_names_.size(); ++i) {
+      stale_position_hold_[i] = static_cast<double>(current_pos_accessor[0][i]);
+    }
+    stale_position_hold_active_ = true;
+    RCLCPP_WARN(
+      get_node()->get_logger(),
+      "Position reference became invalid; holding measured positions captured at stale entry");
+  } else if (!has_invalid_position && stale_position_hold_active_) {
+    stale_position_hold_active_ = false;
+    RCLCPP_INFO(get_node()->get_logger(), "Position reference recovered; resuming normal blending");
+  }
+
+  auto cmd_pos_accessor = inputs_[0].tensor.accessor<float, 2>();
+  for (size_t i = 0; i < joint_names_.size(); ++i) {
+    const double pos_cmd = stale_position_hold_active_ ?
+      stale_position_hold_[i] : reference_interfaces_[i * kInterfacesPerJoint];
+    cmd_pos_accessor[0][i] = static_cast<float>(pos_cmd);
+  }
 }
 
 void SafetyController::populate_inputs_from_interfaces(
   const rclcpp::Duration & period, int64_t timestamp_ns)
 {
-  // command_positions from reference interfaces (index 0 in layout: pos, vel, eff, kp, kd)
-  auto cmd_pos_accessor = inputs_[0].tensor.accessor<float, 2>();
-  for (size_t i = 0; i < joint_names_.size(); ++i) {
-    double pos_cmd = reference_interfaces_[i * kInterfacesPerJoint + 0];
-    // Use current position if reference position is NaN (uninitialized)
-    if (std::isnan(pos_cmd)) {
-      const auto current_pos =
-        state_interfaces_[position_state_indices_[i]].get_optional<double>();
-      if (!current_pos.has_value()) {
-        RCLCPP_ERROR_THROTTLE(
-          get_node()->get_logger(), *get_node()->get_clock(), 1000,
-          "Failed to read position for joint '%s' — using last known value",
-          joint_names_[i].c_str());
-        // Keep whatever was previously in the tensor
-        continue;
-      }
-      pos_cmd = current_pos.value();
-    }
-    cmd_pos_accessor[0][i] = static_cast<float>(pos_cmd);
-  }
-  inputs_[0].timestamp_ns = timestamp_ns;
-
   // current_positions from state interfaces
   if (!utils::populate_tensor_from_state_interfaces(
       inputs_[1], position_state_indices_, state_interfaces_, timestamp_ns))
@@ -795,13 +983,18 @@ void SafetyController::populate_inputs_from_interfaces(
       "Failed to read one or more joint position state interfaces — using stale values");
   }
 
+  // command_positions from reference interfaces (index 0 in layout: pos, vel, eff, kp, kd)
+  populate_position_commands_from_references();
+  inputs_[0].timestamp_ns = timestamp_ns;
+
   // Rate-limit blend_ratio toward target
   const double max_delta = max_blend_ratio_speed_.load() * period.seconds();
   const double error = target_blend_ratio_.load() - current_blend_ratio_;
   current_blend_ratio_ += std::clamp(error, -max_delta, max_delta);
 
   auto blend_ratio_accessor = inputs_[2].tensor.accessor<float, 2>();
-  blend_ratio_accessor[0][0] = static_cast<float>(current_blend_ratio_);
+  blend_ratio_accessor[0][0] =
+    stale_position_hold_active_ ? 1.0F : static_cast<float>(current_blend_ratio_);
   inputs_[2].timestamp_ns = timestamp_ns;
 
   // dt
@@ -825,14 +1018,45 @@ void SafetyController::populate_inputs_from_interfaces(
   }
 }
 
-void SafetyController::write_outputs_to_interfaces()
+void SafetyController::write_outputs_to_interfaces(const rclcpp::Time & time)
 {
+  const auto safe_positions = outputs_[0].tensor.accessor<float, 2>();
+  const auto command_positions = inputs_[0].tensor.accessor<float, 2>();
+  const auto current_positions = inputs_[1].tensor.accessor<float, 2>();
+  const auto blend_ratio = static_cast<double>(inputs_[2].tensor.accessor<float, 2>()[0][0]);
+
+  JointCommandMsg * scaled_delta_msg =
+    scaled_joint_delta_realtime_publisher_ ? &scaled_joint_delta_msg_ : nullptr;
+  if (scaled_delta_msg) {
+    scaled_delta_msg->header.stamp = time;
+    constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+    std::fill(scaled_delta_msg->position.begin(), scaled_delta_msg->position.end(), kNaN);
+    std::fill(scaled_delta_msg->velocity.begin(), scaled_delta_msg->velocity.end(), kNaN);
+    std::fill(scaled_delta_msg->effort.begin(), scaled_delta_msg->effort.end(), kNaN);
+    std::fill(scaled_delta_msg->kp.begin(), scaled_delta_msg->kp.end(), kNaN);
+    std::fill(scaled_delta_msg->kd.begin(), scaled_delta_msg->kd.end(), kNaN);
+  }
+
+  // Blended / safety-limited absolute command actually written to hardware this cycle.
+  JointCommandMsg * blended_msg =
+    blended_command_realtime_publisher_ ? &blended_command_msg_ : nullptr;
+  if (blended_msg) {
+    blended_msg->header.stamp = time;
+  }
+
   // Write safe_positions to position command interfaces.
   utils::write_tensor_to_command_interfaces(
     outputs_[0], position_command_indices_, command_interfaces_);
 
+  if (scaled_delta_msg) {
+    for (size_t i = 0; i < joint_names_.size(); ++i) {
+      scaled_delta_msg->position[i] =
+        blend_ratio * (static_cast<double>(command_positions[0][i]) -
+        static_cast<double>(current_positions[0][i]));
+    }
+  }
+
   if (id_solver_) {
-    const auto safe_positions = outputs_[0].tensor.accessor<float, 2>();
     for (size_t i = 0; i < joint_names_.size(); ++i) {
       gravity_q_(static_cast<Eigen::Index>(i)) = static_cast<double>(safe_positions[0][i]);
     }
@@ -869,10 +1093,34 @@ void SafetyController::write_outputs_to_interfaces()
         eff_cmd + (1.0 - current_blend_ratio_) * gravity_tau;
     }
 
-    (void)command_interfaces_[velocity_command_indices_[i]].set_value(vel_cmd);
-    (void)command_interfaces_[effort_command_indices_[i]].set_value(eff_cmd);
-    (void)command_interfaces_[kp_command_indices_[i]].set_value(kp_cmd);
-    (void)command_interfaces_[kd_command_indices_[i]].set_value(kd_cmd);
+    if (!velocity_command_indices_.empty()) {
+      (void)command_interfaces_[velocity_command_indices_[i]].set_value(vel_cmd);
+    }
+    if (!effort_command_indices_.empty()) {
+      (void)command_interfaces_[effort_command_indices_[i]].set_value(eff_cmd);
+    }
+    if (!kp_command_indices_.empty()) {
+      (void)command_interfaces_[kp_command_indices_[i]].set_value(kp_cmd);
+    }
+    if (!kd_command_indices_.empty()) {
+      (void)command_interfaces_[kd_command_indices_[i]].set_value(kd_cmd);
+    }
+
+    if (blended_msg) {
+      blended_msg->position[i] = static_cast<double>(safe_positions[0][i]);
+      blended_msg->velocity[i] = vel_cmd;
+      blended_msg->effort[i] = eff_cmd;
+      blended_msg->kp[i] = kp_cmd;
+      blended_msg->kd[i] = kd_cmd;
+    }
+  }
+
+  if (scaled_delta_msg) {
+    scaled_joint_delta_realtime_publisher_->try_publish(*scaled_delta_msg);
+  }
+
+  if (blended_msg) {
+    blended_command_realtime_publisher_->try_publish(*blended_msg);
   }
 }
 

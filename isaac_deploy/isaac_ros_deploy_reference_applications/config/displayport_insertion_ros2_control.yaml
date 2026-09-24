@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
+# Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Default ros2_control controller settings for the DisplayPort insertion
+# Isaac ROS Deploy reference application. Launch arguments may override these
+# values at runtime.
+displayport_insertion:
+  controller_manager_name: /controller_manager
+  controller_manager_timeout_s: 10.0
+  inference_controller_name: deploy_inference_controller
+  safety_controller_name: deploy_safety_controller
+  start_inactive: true
+
+  joints:
+    - joint1
+    - joint2
+    - joint3
+    - joint4
+    - joint5
+    - joint6
+    - joint7
+  joint_name_prefix: ""
+  hardware_command_interfaces:
+    - position
+
+  command_suffix: _raw
+  goal_pose_topic: /goal_pose
+  goal_sources:
+    - state/body/position
+    - state/body/rotation
+  goal_message_type: geometry_msgs/msg/PoseStamped
+
+  decimation: 1
+  topic_input_timeout_ms: 250.0
+  use_sim_time: false
+
+  blend_strategy: interpolate
+  blend_reference: activation
+  blend_ratio: 0.0
+  max_blend_ratio_speed: 1.0
+
+  publish_debug_topics: false
+  log_debug_to_console: false
+  debug_action_output_name: arm_action
+
+  publish_scaled_joint_delta: false
+  scaled_joint_delta_topic: ~/scaled_joint_delta

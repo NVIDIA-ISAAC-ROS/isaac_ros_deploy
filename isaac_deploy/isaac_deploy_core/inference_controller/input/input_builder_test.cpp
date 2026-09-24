@@ -225,6 +225,53 @@ TEST(InputBuilderTest, SourceBasedRouting) {
     EXPECT_TRUE(torch::allclose(outputs["right_img"], torch::tensor({{4.0f, 5.0f, 6.0f}})));
 }
 
+TEST(InputBuilderTest, CreateFromYamlPreservesExplicitSource) {
+    auto yaml =
+    YAML::Load(
+      R"(
+      models:
+        policy:
+          inputs:
+          - name: current_body_pos
+            kind: state/body/position
+            source: eef_pos
+            shape: [1, 3]
+            type: tensor
+          - name: target_body_pos
+            kind: state/body/position
+            source: socket_kp_pos
+            shape: [1, 3]
+            type: tensor
+          outputs:
+          - name: actions
+            kind: actions
+            shape: [1, 3]
+      pipeline:
+        feedback_flow: {}
+        data_flow: {}
+    )");
+
+    auto graph_result = parse_graph_config(yaml);
+    ASSERT_TRUE(graph_result.has_value());
+    auto model_config_result = merge_graph_to_model_config(*graph_result, yaml);
+    ASSERT_TRUE(model_config_result.has_value());
+
+    auto config_result = InputBuilder::Config::create_from_model_config(*model_config_result);
+    ASSERT_TRUE(config_result.has_value());
+
+    auto builder_result = InputBuilder::create(*config_result);
+    ASSERT_TRUE(builder_result.has_value());
+
+    auto sources = builder_result->get_unique_source_names();
+    ASSERT_EQ(sources.size(), 2);
+    EXPECT_EQ(sources[0], "eef_pos");
+    EXPECT_EQ(sources[1], "socket_kp_pos");
+
+    auto source_to_kind = builder_result->get_source_to_kind_map();
+    EXPECT_EQ(source_to_kind["eef_pos"], "state/body/position");
+    EXPECT_EQ(source_to_kind["socket_kp_pos"], "state/body/position");
+}
+
 TEST(InputBuilderTest, SourceDefaultsToKind) {
     // When source is not specified, it defaults to kind.
     InputBuilder::Config config {

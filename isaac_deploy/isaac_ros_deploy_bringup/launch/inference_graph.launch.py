@@ -82,8 +82,8 @@ def generate_launch_description():
             default_value='',
             description='Comma-separated source:topic mappings '
                         'for InputBuilderNode. E.g., '
-                        '"state/joint/position:joint_states,'
-                        'state/joint/velocity:joint_states,'
+                        "'state/joint/position:joint_states, "
+                        "'state/joint/velocity:joint_states, "
                         'state/body/rotation:imu". '
                         'Sources not listed default to their '
                         'own name as topic.',
@@ -92,7 +92,7 @@ def generate_launch_description():
             'source_message_type',
             default_value='',
             description='Comma-separated source:message_type overrides. '
-                        'E.g., "velocity_command:geometry_msgs/msg/TwistStamped". '
+                        "E.g., 'velocity_command:geometry_msgs/msg/TwistStamped'. "
                         'Sources not listed use the converter default.',
         ),
         DeclareLaunchArgument(
@@ -100,7 +100,7 @@ def generate_launch_description():
             default_value='',
             description='Comma-separated output:topic overrides '
                         'for OutputBuilderNode. E.g., '
-                        '"bo1:joint_commands". Outputs not listed '
+                        "'bo1:joint_commands'. Outputs not listed "
                         'fall back to the converter message-type default '
                         '(JointCommand -> joint_commands, '
                         'JointCommandTrajectory -> joint_commands_trajectory, '
@@ -216,11 +216,11 @@ def _launch(context):
     except FileNotFoundError as e:
         raise RuntimeError(
             f'Failed to create Triton model repo: {e}. '
-            f'Check that model paths in \'{config_path}\' are correct.'
+            f"Check that model paths in '{config_path}' are correct."
         ) from e
     except Exception as e:
         raise RuntimeError(
-            f'Failed to create Triton model repo from \'{config_path}\': {e}'
+            f"Failed to create Triton model repo from '{config_path}': {e}"
         ) from e
     triton_node_name = f'triton_{repo.model_name}'.replace('-', '_')
 
@@ -233,8 +233,6 @@ def _launch(context):
         'input_binding_names': repo.input_binding_names,
         'output_tensor_names': repo.output_tensor_names,
         'output_binding_names': repo.output_binding_names,
-        'input_tensor_formats': ['nitros_tensor_list_nchw_rgb_f32'],
-        'output_tensor_formats': ['nitros_tensor_list_nchw_rgb_f32'],
         'enable_triton_logging': False,
         'log_level': 0,
         **sim_time_params,

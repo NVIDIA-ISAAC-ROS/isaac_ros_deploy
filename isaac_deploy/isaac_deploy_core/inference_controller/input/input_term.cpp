@@ -58,6 +58,10 @@ expected<InputTermConfig> InputTermConfig::create_from_yaml(const YAML::Node & y
     config.kind = yaml["kind"].as<std::string>();
   }
 
+  if (yaml["source"]) {
+    config.source = yaml["source"].as<std::string>();
+  }
+
   if (!yaml["shape"]) {
     return tl::unexpected(
         make_error(

@@ -34,12 +34,14 @@ find_package(controller_interface REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
 find_package(hardware_interface REQUIRED)
 find_package(pluginlib REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
 find_package(realtime_tools REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(isaac_ros_deploy_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(urdf REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(isaac_ros_inverse_dynamics REQUIRED)
 
@@ -189,7 +191,9 @@ add_library(isaac_ros_deploy_ros2_control_controllers SHARED
   src/controllers/forward_joint_command_controller.cpp
   src/controllers/inference_controller.cpp
   src/controllers/joint_command_broadcaster.cpp
+  src/controllers/joint_parameter_controller.cpp
   src/controllers/safety_controller.cpp
+  src/controllers/task_space_safety_controller.cpp
   src/utils/gain_utils.cpp
 )
 target_include_directories(isaac_ros_deploy_ros2_control_controllers PUBLIC
@@ -201,11 +205,13 @@ ament_target_dependencies(isaac_ros_deploy_ros2_control_controllers
   controller_interface
   hardware_interface
   pluginlib
+  rcl_interfaces
   rclcpp
   rclcpp_lifecycle
   realtime_tools
   sensor_msgs
   std_msgs
+  urdf
   isaac_ros_deploy_interfaces
   isaac_ros_deploy_converters
 )
@@ -367,6 +373,25 @@ if(BUILD_TESTING)
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )
 
+  # Joint parameter controller tests.
+  ament_add_gtest(joint_parameter_controller_test test/test_joint_parameter_controller.cpp)
+  target_link_libraries(joint_parameter_controller_test
+    isaac_ros_deploy_ros2_control_controllers
+  )
+  target_include_directories(joint_parameter_controller_test PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(joint_parameter_controller_test
+    controller_interface
+    hardware_interface
+    rclcpp
+    rclcpp_lifecycle
+  )
+  set_target_properties(joint_parameter_controller_test PROPERTIES
+    INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  )
+
   # ROS safety controller test.
   ament_add_gtest(ros_safety_controller_test test/test_ros_safety_controller.cpp)
   target_link_libraries(ros_safety_controller_test
@@ -399,6 +424,23 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(isaac_ros_deploy_ros2_control_targets HAS_LIBRARY_TARGET)
-ament_export_dependencies(isaac_deploy_core yaml-cpp isaac_ros_inverse_dynamics)
+ament_export_dependencies(
+  controller_interface
+  controller_manager_msgs
+  hardware_interface
+  isaac_deploy_core
+  isaac_ros_deploy_converters
+  isaac_ros_deploy_interfaces
+  isaac_ros_inverse_dynamics
+  pluginlib
+  rcl_interfaces
+  rclcpp
+  rclcpp_lifecycle
+  realtime_tools
+  sensor_msgs
+  std_msgs
+  urdf
+  yaml-cpp
+)
 
 ament_package()

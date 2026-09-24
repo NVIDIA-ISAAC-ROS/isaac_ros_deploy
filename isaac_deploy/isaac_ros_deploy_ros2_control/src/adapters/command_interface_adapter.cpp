@@ -16,6 +16,7 @@
 
 #include "isaac_ros_deploy_ros2_control/adapters/command_interface_adapter.hpp"
 
+#include <limits>
 #include <stdexcept>
 
 #include "isaac_ros_deploy_ros2_control/utils/tensor_interface_utils.hpp"
@@ -23,10 +24,36 @@
 namespace isaac_ros_deploy_ros2_control
 {
 
+namespace
+{
+
+bool is_joint_command_kind(const std::string & kind)
+{
+  return kind.starts_with("target/joint/") || kind == "kp" || kind == "kd";
+}
+
+std::vector<std::vector<std::string>> hardware_element_names(
+  const isaac_deploy_core::OutputTermConfig & config,
+  const std::string & joint_name_prefix)
+{
+  auto names = config.element_names;
+  if (joint_name_prefix.empty() || !is_joint_command_kind(config.kind) || names.empty()) {
+    return names;
+  }
+
+  for (auto & name : names.back()) {
+    name = joint_name_prefix + name;
+  }
+  return names;
+}
+
+}  // namespace
+
 CommandInterfaceAdapter::CommandInterfaceAdapter(
   const std::vector<isaac_deploy_core::OutputTermConfig> & configs,
   const std::string & command_prefix,
-  const std::string & command_suffix)
+  const std::string & command_suffix,
+  const std::string & joint_name_prefix)
 : command_prefix_(command_prefix),
   command_suffix_(command_suffix)
 {
@@ -44,7 +71,7 @@ CommandInterfaceAdapter::CommandInterfaceAdapter(
         .config = config,
         .converter = converter,
         .interface_names = converter->get_required_command_interfaces(
-          config.element_names, command_prefix_, command_suffix_),
+          hardware_element_names(config, joint_name_prefix), command_prefix_, command_suffix_),
       });
   }
 }
@@ -93,6 +120,19 @@ void CommandInterfaceAdapter::write_tensor(
   }
   const auto & entry = entry_at(index);
   entry.converter->write(tensor.tensor, *command_interfaces_, entry.interface_indices);
+}
+
+void CommandInterfaceAdapter::invalidate_command_interfaces() const
+{
+  if (command_interfaces_ == nullptr) {
+    throw std::runtime_error("Command interfaces not set. Call set_command_interfaces first.");
+  }
+
+  for (const auto & entry : entries_) {
+    for (const auto index : entry.interface_indices) {
+      (void)(*command_interfaces_)[index].set_value(std::numeric_limits<double>::quiet_NaN());
+    }
+  }
 }
 
 isaac_deploy_core::TensorSpec CommandInterfaceAdapter::get_tensor_spec(size_t index) const

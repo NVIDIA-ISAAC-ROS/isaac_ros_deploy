@@ -20,7 +20,7 @@ limitations under the License.
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>isaac_ros_deploy_converters</name>
-  <version>4.6.0</version>
+  <version>5.0.0</version>
   <description>ROS 2 message converters and node wrappers for deploying neural network policies</description>
   <maintainer email="isaac-ros-maintainers@nvidia.com">Isaac ROS Maintainers</maintainer>
   <license>Apache-2.0</license>
@@ -31,14 +31,18 @@ limitations under the License.
   <!-- Core libraries -->
   <depend>python3-torch-pip-shim</depend>
   <depend>python3-onnx-pip-shim</depend>
-  <build_depend>cuda-toolkit</build_depend>
+  <build_depend condition="$ISAAC_ROS_PLATFORM != arm64-fastos">cuda-toolkit-13-2</build_depend>
+  <build_depend condition="$ISAAC_ROS_PLATFORM == arm64-fastos">cuda-toolkit-13-0</build_depend>
   <depend>isaac_deploy_core</depend>
 
   <!-- ROS 2 dependencies -->
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
+  <depend>rclpy</depend>
+  <depend>cuda_buffer</depend>
   <depend>isaac_ros_deploy_interfaces</depend>
-  <depend>isaac_ros_tensor_list_interfaces</depend>
+  <depend>isaac_ros_tensor_msgs</depend>
+  <depend>tensor_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>

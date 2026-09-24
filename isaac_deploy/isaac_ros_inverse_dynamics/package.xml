@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>isaac_ros_inverse_dynamics</name>
-  <version>4.6.0</version>
+  <version>5.0.0</version>
   <description>
     Pinocchio-backed inverse dynamics solver shared across controllers
     (e.g. the bimanual IK and safety controllers).

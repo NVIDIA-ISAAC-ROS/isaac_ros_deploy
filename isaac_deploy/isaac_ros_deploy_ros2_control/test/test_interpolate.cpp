@@ -179,6 +179,49 @@ TEST(InterpolateTest, CreateFailsOnHomeSizeMismatch) {
     EXPECT_FALSE(result.has_value());
 }
 
+TEST(InterpolateTest, CurrentReferenceBlendsFromMeasuredCurrentEveryStep) {
+    InterpolateConfig config {
+    .max_velocities = {10.0, 10.0},
+    .reference = BlendReference::kCurrent,
+    };
+    auto strategy = *Interpolate::create(config);
+
+    auto command = torch::tensor({2.0f, 4.0f});
+
+    auto step1 = strategy->apply(command, torch::tensor({0.0f, 0.0f}), 0.25, 1.0);
+    ASSERT_TRUE(step1.has_value());
+    EXPECT_TRUE(torch::allclose(*step1, torch::tensor({0.5f, 1.0f})));
+
+    auto step2 = strategy->apply(command, torch::tensor({1.0f, 2.0f}), 0.25, 1.0);
+    ASSERT_TRUE(step2.has_value());
+    EXPECT_TRUE(torch::allclose(*step2, torch::tensor({1.25f, 2.5f})));
+}
+
+TEST(InterpolateTest, CurrentReferenceVelocityLimitUsesMeasuredCurrent) {
+    InterpolateConfig config {
+    .max_velocities = {0.1},
+    .reference = BlendReference::kCurrent,
+    };
+    auto strategy = *Interpolate::create(config);
+
+    auto result = strategy->apply(torch::tensor({2.0f}), torch::tensor({1.0f}), 1.0, 1.0);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(torch::allclose(*result, torch::tensor({1.1f})));
+}
+
+TEST(InterpolateTest, CurrentReferenceIgnoresHomeAtZeroBlend) {
+    InterpolateConfig config {
+    .max_velocities = {10.0},
+    .default_position = {0.0},
+    .reference = BlendReference::kCurrent,
+    };
+    auto strategy = *Interpolate::create(config);
+
+    auto result = strategy->apply(torch::tensor({2.0f}), torch::tensor({1.0f}), 0.0, 1.0);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(torch::allclose(*result, torch::tensor({1.0f})));
+}
+
 TEST(InterpolateTest, NonPositiveVelocitySkipsClamp) {
     InterpolateConfig config {.max_velocities = {-1.0, 0.0, 0.5}};
     auto strategy = *Interpolate::create(config);

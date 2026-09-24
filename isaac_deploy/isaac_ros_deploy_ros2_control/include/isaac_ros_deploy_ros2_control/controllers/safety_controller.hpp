@@ -27,10 +27,12 @@
 #include <controller_interface/chainable_controller_interface.hpp>
 #include <controller_manager_msgs/srv/switch_controller.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <realtime_tools/realtime_publisher.hpp>
 
 #include "isaac_ros_inverse_dynamics/inverse_dynamics_solver.hpp"
 
 #include "isaac_deploy_core/core/types.hpp"
+#include "isaac_ros_deploy_interfaces/msg/joint_command.hpp"
 #include "isaac_ros_deploy_ros2_control/safety_controller/safety_controller.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/gain_utils.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/realtime_service_client.hpp"
@@ -85,15 +87,21 @@ private:
   // overwrites this from the "blend_strategy" parameter (default "interpolate").
   isaac_deploy_core::BlendStrategy blend_strategy_{
     isaac_deploy_core::BlendStrategy::kNoPostProcessing};
+  isaac_deploy_core::BlendReference blend_reference_{
+    isaac_deploy_core::BlendReference::kActivation};
   std::vector<std::string> joint_names_;
   std::vector<double> per_joint_kp_;
   std::vector<double> per_joint_kd_;
   // Optional per-joint default ("home") position; empty when not configured, in which
   // case interpolate falls back to the measured position at activation.
   std::vector<double> per_joint_default_position_;
+  std::vector<std::string> hardware_command_interfaces_{
+    "position", "velocity", "effort", "kp", "kd"};
   std::atomic<double> target_blend_ratio_{0.0};
   double current_blend_ratio_{0.0};  // only accessed from RT update thread
   std::atomic<double> max_blend_ratio_speed_{1.0};  // units/second
+  bool stale_position_hold_active_{false};
+  std::vector<double> stale_position_hold_;
   bool velocity_threshold_enabled_{false};
   double max_joint_velocity_{0.0};
   double mean_joint_velocity_{0.0};
@@ -103,6 +111,10 @@ private:
   std::string emergency_controller_;
   double emergency_switch_timeout_s_{2.0};
   std::vector<std::string> configured_emergency_deactivate_controllers_;
+  bool publish_scaled_joint_delta_{false};
+  std::string scaled_joint_delta_topic_{"~/scaled_joint_delta"};
+  bool publish_blended_command_{false};
+  std::string blended_command_topic_{"~/blended_command"};
 
   using EmergencySwitchClient =
     utils::RealtimeServiceClient<controller_manager_msgs::srv::SwitchController>;
@@ -121,6 +133,20 @@ private:
 
   // Parameter callback handle
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+
+  // Publishes the blend-ratio-scaled joint-position delta for introspection.
+  using JointCommandMsg = isaac_ros_deploy_interfaces::msg::JointCommand;
+  using JointCommandPublisher = realtime_tools::RealtimePublisher<JointCommandMsg>;
+  rclcpp::Publisher<JointCommandMsg>::SharedPtr scaled_joint_delta_publisher_;
+  std::shared_ptr<JointCommandPublisher> scaled_joint_delta_realtime_publisher_;
+  JointCommandMsg scaled_joint_delta_msg_;
+
+  // Publishes the blended / safety-limited absolute command actually written to
+  // the hardware interfaces this cycle (position = clamped safe target;
+  // velocity/effort/kp/kd = the post-blend values sent to the joints).
+  rclcpp::Publisher<JointCommandMsg>::SharedPtr blended_command_publisher_;
+  std::shared_ptr<JointCommandPublisher> blended_command_realtime_publisher_;
+  JointCommandMsg blended_command_msg_;
 
   // Core controller.
   std::optional<isaac_deploy_core::SafetyController> safety_controller_;
@@ -150,8 +176,9 @@ private:
   void load_out_of_domain_detection_params();
   void resolve_excluded_joint_indices();
   bool create_safety_controller();
+  void populate_position_commands_from_references();
   void populate_inputs_from_interfaces(const rclcpp::Duration & period, int64_t timestamp_ns);
-  void write_outputs_to_interfaces();
+  void write_outputs_to_interfaces(const rclcpp::Time & time);
   void configure_emergency_switch_client();
   controller_manager_msgs::srv::SwitchController::Request build_emergency_switch_request() const;
   void latch_emergency(const std::string & reason);

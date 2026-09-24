@@ -24,10 +24,12 @@ namespace isaac_deploy_core
 
 Interpolate::Interpolate(
   torch::Tensor max_velocities, torch::Tensor home_position,
-  torch::Tensor configured_home_mask)
+  torch::Tensor configured_home_mask,
+  BlendReference reference)
 : max_velocities_(std::move(max_velocities)),
   home_position_(std::move(home_position)),
-  configured_home_mask_(std::move(configured_home_mask)) {}
+  configured_home_mask_(std::move(configured_home_mask)),
+  reference_(reference) {}
 
 expected<std::unique_ptr<
     Interpolate>> Interpolate::create(const InterpolateConfig & config)
@@ -61,7 +63,7 @@ expected<std::unique_ptr<
   return std::unique_ptr<Interpolate>(
     new Interpolate(
       std::move(max_velocities), std::move(home_position),
-      std::move(configured_home_mask)));
+      std::move(configured_home_mask), config.reference));
 }
 
 expected<torch::Tensor> Interpolate::apply(
@@ -70,6 +72,19 @@ expected<torch::Tensor> Interpolate::apply(
   double blend_ratio, double dt)
 {
   const auto max_delta = max_velocities_ * dt;
+
+  // Current-reference mode scales the command delta from the measured joint positions every
+  // controller tick: target = current + blend_ratio * (command - current).
+  if (reference_ == BlendReference::kCurrent) {
+    const auto target =
+      current_positions + blend_ratio * (command_positions - current_positions);
+    const auto bound = torch::where(
+      max_delta <= 0,
+      torch::full_like(max_delta, std::numeric_limits<float>::infinity()),
+      max_delta);
+    const auto clamped_delta = torch::clamp(target - current_positions, -bound, bound);
+    return current_positions + clamped_delta;
+  }
 
   if (!integrated_initialized_) {
     const auto home_reshaped = home_position_.reshape_as(current_positions);

@@ -45,6 +45,8 @@ struct SafetyControllerConfig
       /// Optional per-joint default ("home") position (kInterpolate).
       /// When non-empty, blend_ratio = 0 slews to this pose instead of the activation pose.
     std::vector<double> default_position;
+      /// Anchor for blend_ratio interpolation.
+    BlendReference reference = BlendReference::kActivation;
   };
 
     /// Out-of-domain detection configuration.

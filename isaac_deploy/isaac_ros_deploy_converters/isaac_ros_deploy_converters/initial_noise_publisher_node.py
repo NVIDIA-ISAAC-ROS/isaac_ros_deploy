@@ -34,7 +34,7 @@ Usage:
 from pathlib import Path
 
 from isaac_ros_deploy_converters.tensor_utils import make_tensor
-from isaac_ros_tensor_list_interfaces.msg import TensorList
+from isaac_ros_tensor_msgs.msg import TensorList
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -109,14 +109,17 @@ class InitialNoisePublisherNode(Node):
     def _publish_callback(self):
         """Publish one TensorList with random noise tensors."""
         tensors = []
+        names = []
         for inp in self.noise_inputs:
             shape = tuple(inp['shape'])
             dtype = np.dtype(inp.get('dtype', 'float32'))
             noise = self.rng.standard_normal(shape).astype(dtype)
-            tensors.append(make_tensor(inp['name'], noise))
+            names.append(inp['name'])
+            tensors.append(make_tensor(noise))
 
         msg = TensorList()
         msg.header.stamp = self.get_clock().now().to_msg()
+        msg.names = names
         msg.tensors = tensors
         self.publisher.publish(msg)
 
