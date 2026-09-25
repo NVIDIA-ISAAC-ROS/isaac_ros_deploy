@@ -36,6 +36,8 @@ limitations under the License.
 
   <!-- ROS 2 dependencies -->
   <depend>rclcpp</depend>
+  <depend>rcl</depend>
+  <depend>builtin_interfaces</depend>
   <depend>rclcpp_components</depend>
   <depend>isaac_ros_deploy_interfaces</depend>
   <depend>isaac_ros_tensor_list_interfaces</depend>

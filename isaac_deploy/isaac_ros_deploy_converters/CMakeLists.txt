@@ -30,6 +30,8 @@ find_package(ament_cmake_python REQUIRED)
 find_package(isaac_deploy_core REQUIRED)
 
 find_package(rclcpp REQUIRED)
+find_package(rcl REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(isaac_ros_deploy_interfaces REQUIRED)
 find_package(isaac_ros_tensor_list_interfaces REQUIRED)
@@ -137,6 +139,8 @@ target_include_directories(isaac_ros_deploy_converters_lib PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(isaac_ros_deploy_converters_lib
+  rcl
+  builtin_interfaces
   rclcpp
   rclcpp_components
   isaac_ros_deploy_interfaces

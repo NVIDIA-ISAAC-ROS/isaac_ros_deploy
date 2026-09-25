@@ -26,6 +26,7 @@ find_package(Python3 COMPONENTS Interpreter Development NumPy REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "srv/PrepareObservation.srv"
   "msg/BodyCommand.msg"
   "msg/JointCommand.msg"
   "msg/JointCommandTrajectory.msg"

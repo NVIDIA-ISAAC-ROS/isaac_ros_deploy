@@ -24,8 +24,10 @@
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
+#include "builtin_interfaces/msg/time.hpp"
 
 #include "isaac_ros_tensor_list_interfaces/msg/tensor_list.hpp"
+#include "isaac_ros_deploy_interfaces/srv/prepare_observation.hpp"
 
 #include "isaac_deploy_core/inference_controller/input/input_builder.hpp"
 
@@ -59,6 +61,9 @@ struct SubscriptionGroup
   rclcpp::GenericSubscription::SharedPtr subscription;
   /// Latest received message.
   std::shared_ptr<rclcpp::SerializedMessage> latest_msg;
+  /// State inputs selected from graph kinds require the prepared observation stamp.
+  bool synchronized{false};
+  std::shared_ptr<rclcpp::SerializedMessage> snapshot_msg;
   /// Time when latest message was received.
   rclcpp::Time receive_time{0, 0, RCL_ROS_TIME};
   /// Mutex for thread-safe access.
@@ -80,6 +85,9 @@ struct SubscriptionGroup
 /// - source_to_topic.<source>: ROS topic to subscribe to for a given source
 ///   (defaults to the source name itself)
 /// - output_topic: Topic name for the output TensorList (default: "input_tensors")
+/// - synchronize_observations: Require prepared, timestamp-matched state inputs
+///   using ~/prepare_observation and acknowledge them on ~/observation_consumed.
+///   Requires use_sim_time. Restart the node before resetting simulation time.
 class InputBuilderNode : public rclcpp::Node
 {
 public:
@@ -91,6 +99,12 @@ private:
 
   /// Timer callback to collect inputs and publish TensorList.
   void timer_callback();
+
+  void publish_snapshot(const rclcpp::Time & stamp);
+  void try_publish_snapshot();
+  void prepare_observation(
+    const isaac_ros_deploy_interfaces::srv::PrepareObservation::Request & request,
+    isaac_ros_deploy_interfaces::srv::PrepareObservation::Response & response);
 
   /// Create subscription groups based on source_to_topic mapping.
   void create_subscription_groups(
@@ -124,6 +138,14 @@ private:
 
   /// Pre-allocated output TensorDict for InputBuilder.
   isaac_deploy_core::TensorDict nn_inputs_;
+
+  bool synchronize_observations_{false};
+  std::optional<rclcpp::Time> last_prepared_stamp_;
+  std::optional<rclcpp::Time> pending_stamp_;
+  bool snapshot_due_{false};
+  rclcpp::Service<isaac_ros_deploy_interfaces::srv::PrepareObservation>::SharedPtr
+    prepare_service_;
+  rclcpp::Publisher<builtin_interfaces::msg::Time>::SharedPtr consumed_pub_;
 
   /// Whether the node is activated.
   bool activated_{false};

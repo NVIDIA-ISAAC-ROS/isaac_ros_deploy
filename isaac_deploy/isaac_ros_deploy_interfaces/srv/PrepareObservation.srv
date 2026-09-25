@@ -1,0 +1,7 @@
+# Select the observation for a future simulation timestamp before publishing it.
+# Requests must increase monotonically within one node lifetime.
+builtin_interfaces/Time stamp
+---
+bool success
+string error
+bool requires_images

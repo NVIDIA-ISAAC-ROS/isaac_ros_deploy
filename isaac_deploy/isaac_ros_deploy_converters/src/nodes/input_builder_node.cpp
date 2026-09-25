@@ -23,6 +23,10 @@
 #include <utility>
 
 #include "rclcpp_components/register_node_macro.hpp"
+#include "rcl/timer.h"
+#include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/msg/imu.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"
 
 #include "isaac_deploy_core/inference_controller/config_parser.hpp"
 #include "isaac_deploy_core/inference_controller/safetensors_loader.hpp"
@@ -34,6 +38,31 @@ namespace isaac_ros_deploy_converters
 
 namespace
 {
+
+template<typename Message>
+rclcpp::Time message_stamp(const std::shared_ptr<rclcpp::SerializedMessage> & serialized)
+{
+  Message message;
+  rclcpp::Serialization<Message> serializer;
+  serializer.deserialize_message(serialized.get(), &message);
+  return rclcpp::Time(message.header.stamp, RCL_ROS_TIME);
+}
+
+bool supports_snapshot_stamp(const std::string & type)
+{
+  return type == "sensor_msgs/msg/Image" || type == "sensor_msgs/msg/JointState" ||
+         type == "sensor_msgs/msg/Imu";
+}
+
+rclcpp::Time observation_stamp(
+  const std::string & type, const std::shared_ptr<rclcpp::SerializedMessage> & message)
+{
+  if (type == "sensor_msgs/msg/Image") {return message_stamp<sensor_msgs::msg::Image>(message);}
+  if (type == "sensor_msgs/msg/JointState") {
+    return message_stamp<sensor_msgs::msg::JointState>(message);
+  }
+  return message_stamp<sensor_msgs::msg::Imu>(message);
+}
 
 torch::Dtype parse_torch_dtype(const std::string & dtype_str)
 {
@@ -59,6 +88,7 @@ InputBuilderNode::InputBuilderNode(const rclcpp::NodeOptions & options)
       return std::make_shared<TensorListConverter>(source);
     });
 
+  synchronize_observations_ = declare_parameter<bool>("synchronize_observations", false);
   declare_parameter<std::string>("config_path", "");
   declare_parameter<double>("publish_rate", 50.0);
   declare_parameter<std::string>("output_topic", "input_tensors");
@@ -182,6 +212,21 @@ void InputBuilderNode::configure()
     period,
     std::bind(&InputBuilderNode::timer_callback, this));
 
+  if (synchronize_observations_) {
+    if (!get_parameter("use_sim_time").as_bool()) {
+      throw std::runtime_error("synchronize_observations requires use_sim_time");
+    }
+    consumed_pub_ = create_publisher<builtin_interfaces::msg::Time>(
+      "~/observation_consumed", rclcpp::QoS(1).reliable().transient_local());
+    prepare_service_ = create_service<isaac_ros_deploy_interfaces::srv::PrepareObservation>(
+      "~/prepare_observation",
+      [this](
+        const isaac_ros_deploy_interfaces::srv::PrepareObservation::Request::SharedPtr request,
+        isaac_ros_deploy_interfaces::srv::PrepareObservation::Response::SharedPtr response) {
+        prepare_observation(*request, *response);
+      });
+  }
+
   RCLCPP_INFO(
     get_logger(), "InputBuilderNode configured with %zu subscription groups",
     subscription_groups_.size());
@@ -214,13 +259,14 @@ void InputBuilderNode::create_subscription_groups(
   auto add_to_group = [&](
     const std::string & source, const std::string & topic,
     std::shared_ptr<MessageToTensorConverter> converter,
-    std::optional<torch::Tensor> initial_value = std::nullopt) {
+    std::optional<torch::Tensor> initial_value = std::nullopt, bool synchronized = false) {
       const std::string message_type = converter->get_message_type();
       auto it = groups.find(topic);
       if (it == groups.end()) {
         auto group = std::make_unique<SubscriptionGroup>();
         group->topic = topic;
         group->message_type = message_type;
+        group->synchronized = synchronized;
         group->converters.push_back({source, converter, initial_value});
         groups[topic] = std::move(group);
         return;
@@ -233,6 +279,14 @@ void InputBuilderNode::create_subscription_groups(
           message_type.c_str(), source.c_str());
         return;
       }
+      if ((initial_value && it->second->synchronized) ||
+        (synchronized && std::any_of(
+          it->second->converters.begin(), it->second->converters.end(),
+          [](const auto & entry) {return entry.initial_value.has_value();})))
+      {
+        throw std::runtime_error("Feedback and synchronized state cannot share topic: " + topic);
+      }
+      it->second->synchronized |= synchronized;
       it->second->converters.push_back({source, converter, initial_value});
     };
 
@@ -244,13 +298,17 @@ void InputBuilderNode::create_subscription_groups(
     const std::string kind = raw_kind.empty() ? "tensor" : raw_kind;
     const auto message_type = resolve_message_type(source);
     auto converter = registry.create_for_kind(kind, source, message_type);
+    const bool synchronized = synchronize_observations_ && kind.starts_with("state/");
+    if (synchronized && (!converter || !supports_snapshot_stamp(converter->get_message_type()))) {
+      throw std::runtime_error("Cannot synchronize state source: " + source);
+    }
     if (!converter) {
       RCLCPP_WARN(
         get_logger(), "No converter found for kind '%s' (source '%s'), skipping",
         kind.c_str(), source.c_str());
       continue;
     }
-    add_to_group(source, resolve_topic(source), converter);
+    add_to_group(source, resolve_topic(source), converter, std::nullopt, synchronized);
   }
 
   // Feedback inputs: subscribe to inference output topic with LEAPP initial values
@@ -280,9 +338,18 @@ void InputBuilderNode::create_subscription_groups(
   // Create subscriptions for each group.
   for (auto & [topic, group] : groups) {
     auto callback = [this, grp = group.get()](std::shared_ptr<rclcpp::SerializedMessage> msg) {
-        std::lock_guard<std::mutex> lock(grp->mutex);
-        grp->latest_msg = msg;
-        grp->receive_time = now();
+        {
+          std::lock_guard<std::mutex> lock(grp->mutex);
+          if (grp->synchronized) {
+            if (pending_stamp_ && observation_stamp(grp->message_type, msg) == *pending_stamp_) {
+              grp->snapshot_msg = msg;
+            }
+          } else {
+            grp->latest_msg = msg;
+          }
+          grp->receive_time = now();
+        }
+        if (synchronize_observations_) {try_publish_snapshot();}
       };
 
     group->subscription = create_generic_subscription(
@@ -302,9 +369,71 @@ void InputBuilderNode::create_subscription_groups(
   }
 }
 
+void InputBuilderNode::prepare_observation(
+  const isaac_ros_deploy_interfaces::srv::PrepareObservation::Request & request,
+  isaac_ros_deploy_interfaces::srv::PrepareObservation::Response & response)
+{
+  const rclcpp::Time stamp(request.stamp, RCL_ROS_TIME);
+  if (last_prepared_stamp_ && stamp <= *last_prepared_stamp_) {
+    response.error = "Observation timestamps must increase; restart the node for a new episode";
+    return;
+  }
+  if (pending_stamp_) {
+    response.error = "Wait for observation_consumed before preparing another observation";
+    return;
+  }
+  int64_t next_call;
+  if (rcl_timer_get_next_call_time(timer_->get_timer_handle().get(), &next_call) != RCL_RET_OK) {
+    response.error = "Cannot read inference timer deadline";
+    return;
+  }
+  if (stamp.nanoseconds() < now().nanoseconds()) {
+    response.error = "Observation timestamp precedes the simulation clock";
+    return;
+  }
+  response.requires_images = stamp.nanoseconds() >= next_call;
+  if (response.requires_images) {
+    pending_stamp_ = stamp;
+    snapshot_due_ = false;
+    for (auto & group : subscription_groups_) {group->snapshot_msg.reset();}
+  }
+  last_prepared_stamp_ = stamp;
+  response.success = true;
+}
+
 void InputBuilderNode::timer_callback()
 {
-  const rclcpp::Time current_stamp = now();
+  if (!synchronize_observations_) {
+    publish_snapshot(now());
+    return;
+  }
+  // DDS discovery can precede the client's first prepare call. Do not consume
+  // unprepared latest inputs while waiting for that explicit session boundary.
+  if (!last_prepared_stamp_) {return;}
+  if (!pending_stamp_ || snapshot_due_) {
+    throw std::runtime_error("Inference timer advanced without a prepared, consumed observation");
+  }
+  snapshot_due_ = true;
+  try_publish_snapshot();
+}
+
+void InputBuilderNode::try_publish_snapshot()
+{
+  if (!pending_stamp_ || !snapshot_due_) {return;}
+  for (const auto & group : subscription_groups_) {
+    if (group->synchronized && !group->snapshot_msg) {return;}
+    if (!group->synchronized && !group->latest_msg &&
+      !std::all_of(group->converters.begin(), group->converters.end(),
+      [](const auto & entry) {return entry.initial_value.has_value();}))
+    {
+      return;
+    }
+  }
+  publish_snapshot(*pending_stamp_);
+}
+
+void InputBuilderNode::publish_snapshot(const rclcpp::Time & current_stamp)
+{
 
   // Convert messages from all subscription groups.
   isaac_deploy_core::TensorDict all_converted;
@@ -314,7 +443,7 @@ void InputBuilderNode::timer_callback()
     std::shared_ptr<rclcpp::SerializedMessage> msg;
     {
       std::lock_guard<std::mutex> lock(group->mutex);
-      msg = group->latest_msg;
+      msg = group->synchronized ? group->snapshot_msg : group->latest_msg;
     }
 
     if (!msg) {
@@ -407,7 +536,7 @@ void InputBuilderNode::timer_callback()
     return;
   }
 
-  validate_input_synchronization(current_stamp);
+  if (!synchronize_observations_) {validate_input_synchronization(current_stamp);}
 
   // Update builder_inputs_ with latest converted tensors (positionally aligned).
   for (size_t i = 0; i < builder_inputs_.size(); ++i) {
@@ -434,6 +563,12 @@ void InputBuilderNode::timer_callback()
   }
 
   output_pub_->publish(msg);
+  if (synchronize_observations_) {
+    consumed_pub_->publish(static_cast<builtin_interfaces::msg::Time>(current_stamp));
+    pending_stamp_.reset();
+    snapshot_due_ = false;
+    for (auto & group : subscription_groups_) {group->snapshot_msg.reset();}
+  }
 }
 
 void InputBuilderNode::validate_input_synchronization(const rclcpp::Time & current_time)

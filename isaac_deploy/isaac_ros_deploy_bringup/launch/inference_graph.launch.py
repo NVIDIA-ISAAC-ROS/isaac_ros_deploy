@@ -66,6 +66,11 @@ def generate_launch_description():
             description='Rate at which InputBuilderNode publishes (Hz).',
         ),
         DeclareLaunchArgument(
+            'synchronize_observations',
+            default_value='false',
+            description='Require prepared, timestamp-matched simulation observations.',
+        ),
+        DeclareLaunchArgument(
             'namespace',
             default_value='inference_graph',
             description='Namespace for all pipeline nodes and topics.',
@@ -181,6 +186,9 @@ def _launch(context):
         'config_path': config_path,
         'publish_rate': float(LaunchConfiguration('publish_rate').perform(context)),
         'output_topic': 'input_tensors',
+        'synchronize_observations': (
+            LaunchConfiguration('synchronize_observations').perform(context).lower() == 'true'
+        ),
         **sim_time_params,
         **source_to_topic_params,
         **source_message_type_params,
