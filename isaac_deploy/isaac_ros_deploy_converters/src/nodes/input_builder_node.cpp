@@ -178,7 +178,7 @@ void InputBuilderNode::configure()
   RCLCPP_INFO(get_logger(), "Publishing bundled TensorList on '%s'", output_topic.c_str());
 
   const auto period = std::chrono::duration<double>(1.0 / publish_rate_);
-  timer_ = create_wall_timer(
+  timer_ = create_timer(
     period,
     std::bind(&InputBuilderNode::timer_callback, this));
 
