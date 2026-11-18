@@ -18,6 +18,7 @@
 
 #include <limits>
 
+#include "isaac_common/tracing/nvtx_scope.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/tensor_interface_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 
@@ -178,6 +179,8 @@ controller_interface::return_type JointCommandBroadcaster::update(
   if (!realtime_publisher_) {
     return controller_interface::return_type::OK;
   }
+
+  ISAAC_DEPLOY_NVTX_SCOPE("ctrl:cmd_broadcast", nvidia::isaac_ros::tracing::kColorWriteCommand);
 
   msg_.header.stamp = time;
 

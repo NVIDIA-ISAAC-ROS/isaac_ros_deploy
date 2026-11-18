@@ -25,6 +25,7 @@
 #include <regex>
 #include <string_view>
 
+#include "isaac_common/tracing/nvtx_scope.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/gain_utils.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/tensor_interface_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
@@ -246,6 +247,10 @@ controller_interface::CallbackReturn SafetyController::on_init()
 controller_interface::CallbackReturn SafetyController::on_configure(
   const rclcpp_lifecycle::State &)
 {
+  // Per-instance NVTX name: several SafetyControllers run in the same loop (lower_body,
+  // upper_body), and a shared literal would sum them into one indistinguishable row.
+  nvtx_span_name_ = "ctrl:safety:" + std::string(get_node()->get_name());
+
   // Load parameters
   const auto blend_strategy_str =
     get_node()->get_parameter("blend_strategy").as_string();
@@ -910,6 +915,11 @@ controller_interface::return_type SafetyController::update_and_write_commands(
   if (!safety_controller_) {
     return controller_interface::return_type::ERROR;
   }
+
+  // Runs in the same control loop as the inference controller; without a range here the
+  // safety pass shows up as an unexplained gap between consecutive ctrl:update spans.
+  const nvidia::isaac_ros::tracing::ScopedRange nvtx_span{
+    nvtx_span_name_.c_str(), nvidia::isaac_ros::tracing::kColorSafety};
 
   int64_t timestamp_ns = time.nanoseconds();
 

@@ -6,14 +6,16 @@
 
 #include <gtest/gtest.h>
 
-#include "isaac_deploy_core/chunk_sampler.hpp"
+#include "isaac_ros_deploy_ros2_control/utils/chunk_sampler.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 namespace
 {
 
-using isaac_deploy_core::compute_chunk_position;
-using isaac_deploy_core::interpolate_field;
+using isaac_ros_deploy_ros2_control::utils::ChunkSamplePosition;
+using isaac_ros_deploy_ros2_control::utils::compute_chunk_position;
+using isaac_ros_deploy_ros2_control::utils::field_has_sample;
+using isaac_ros_deploy_ros2_control::utils::interpolate_field;
 
 constexpr double kEps = 1e-9;
 
@@ -75,7 +77,7 @@ TEST(ChunkSamplerTest, InterpolateFieldHalfway)
     10.0, 20.0, 30.0,   // step 0
     12.0, 24.0, 36.0,   // step 1
   };
-  isaac_deploy_core::ChunkSamplePosition pos{
+  ChunkSamplePosition pos{
     /*lo=*/0, /*hi=*/1, /*alpha=*/0.5,
     /*past_end=*/false, /*before_start=*/false};
 
@@ -87,12 +89,24 @@ TEST(ChunkSamplerTest, InterpolateFieldHalfway)
 TEST(ChunkSamplerTest, InterpolateFieldAtClampedEndpoint)
 {
   std::vector<double> field = {1.0, 2.0, 3.0, 4.0};
-  isaac_deploy_core::ChunkSamplePosition pos{
+  ChunkSamplePosition pos{
     /*lo=*/1, /*hi=*/1, /*alpha=*/0.0,
     /*past_end=*/true, /*before_start=*/false};
 
   EXPECT_NEAR(interpolate_field(field, /*n=*/2, /*col=*/0, pos), 3.0, kEps);
   EXPECT_NEAR(interpolate_field(field, /*n=*/2, /*col=*/1, pos), 4.0, kEps);
+}
+
+TEST(ChunkSamplerTest, FieldHasSampleRejectsShortOptionalField)
+{
+  // Two joints are requested at step 1, but the optional field only has step 0.
+  std::vector<double> field = {1.0, 2.0};
+  ChunkSamplePosition pos{
+    /*lo=*/0, /*hi=*/1, /*alpha=*/0.5,
+    /*past_end=*/false, /*before_start=*/false};
+
+  EXPECT_FALSE(field_has_sample(field, /*n=*/2, /*col=*/0, pos));
+  EXPECT_FALSE(field_has_sample(field, /*n=*/2, /*col=*/1, pos));
 }
 
 TEST(ChunkSamplerTest, HorizonOneIsAlwaysClampedPastEnd)

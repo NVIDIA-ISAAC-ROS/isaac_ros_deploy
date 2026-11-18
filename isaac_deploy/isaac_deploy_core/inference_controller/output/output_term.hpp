@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,10 @@ struct OutputTermConfig
     /// Element order as produced by the neural network. During activate(), this is compared
     /// against TensorSpec.names (the middleware's expected order) to compute reorder indices.
   std::vector<std::vector<std::string>> element_names;
+  /// Axis containing temporal samples.
+  std::optional<std::size_t> temporal_axis;
+  /// Period between temporal samples, in milliseconds.
+  std::optional<double> temporal_period_ms;
 
     /// Create an OutputTermConfig from a YAML node.
   static expected<OutputTermConfig> create_from_yaml(const YAML::Node & yaml);
@@ -71,6 +76,16 @@ public:
   const std::vector<std::vector<std::string>> & element_names() const
   {
     return config_.element_names;
+  }
+
+  const std::optional<double> & temporal_period_ms() const
+  {
+    return config_.temporal_period_ms;
+  }
+
+  const std::optional<std::size_t> & temporal_axis() const
+  {
+    return config_.temporal_axis;
   }
 
     /// Prepare the term with output specs.

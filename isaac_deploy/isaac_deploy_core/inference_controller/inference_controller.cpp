@@ -19,8 +19,12 @@
 #include <unordered_map>
 #include <utility>
 
+#include "isaac_common/tracing/nvtx_scope.hpp"
+
 namespace isaac_deploy_core
 {
+
+namespace nvtx = ::nvidia::isaac_ros::tracing;
 
 InferenceController::InferenceController(
   InputBuilder input_builder,
@@ -196,16 +200,22 @@ expected<void> InferenceController::advance(
   }
 
     // Build neural network inputs (fully positional, RT-safe).
+  static const nvtx::RegisteredName state_builder_name{"infer:state_builder"};
+  nvtx::ScopedRange state_builder_span{state_builder_name, nvtx::kColorStateBuilder};
   auto input_result = input_builder_.advance(all_inputs_, nn_inputs_);
   if (!input_result.has_value()) {
     return tl::unexpected(input_result.error());
   }
+  state_builder_span.end();
 
     // Run inference.
+  static const nvtx::RegisteredName runner_name{"infer:runner"};
+  nvtx::ScopedRange runner_span{runner_name, nvtx::kColorRunner};
   auto run_result = runner_->run(nn_inputs_, nn_outputs_);
   if (!run_result.has_value()) {
     return tl::unexpected(run_result.error());
   }
+  runner_span.end();
 
     // Update feedback positions with NN outputs for next cycle.
   for (const auto & mapping : feedback_mappings_) {
@@ -221,10 +231,13 @@ expected<void> InferenceController::advance(
   }
 
     // Build middleware outputs.
+  static const nvtx::RegisteredName action_chunk_name{"infer:action_chunk"};
+  nvtx::ScopedRange action_chunk_span{action_chunk_name, nvtx::kColorActionChunk};
   auto output_result = output_builder_.advance(nn_outputs_, outputs);
   if (!output_result.has_value()) {
     return tl::unexpected(output_result.error());
   }
+  action_chunk_span.end();
 
   return expected<void>();
 }

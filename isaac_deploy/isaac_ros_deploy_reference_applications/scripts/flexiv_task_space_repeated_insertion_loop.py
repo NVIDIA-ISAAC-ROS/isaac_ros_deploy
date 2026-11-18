@@ -293,8 +293,8 @@ class FlexivTaskSpaceRepeatedInsertionLoop(Node):
         self.latest_feedback: Optional[PoseStamped] = None
         self.latest_joint_state: Optional[JointState] = None
 
-        self.create_subscription(PoseStamped, self.feedback_topic, self._feedback_cb, 10)
-        self.create_subscription(JointState, "/joint_states", self._joint_state_cb, 10)
+        self.create_subscription(PoseStamped, self.feedback_topic, self._feedback_cb, 1)
+        self.create_subscription(JointState, "/joint_states", self._joint_state_cb, 1)
         self.command_pub = self.create_publisher(
             CartesianMotionForceCommand, self.command_topic, 10
         )

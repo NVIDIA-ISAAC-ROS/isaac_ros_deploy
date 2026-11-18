@@ -16,11 +16,15 @@
 
 #include "isaac_ros_deploy_converters/nodes/output_builder_node.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <optional>
 #include "yaml-cpp/yaml.h"
 
 #include "rclcpp_components/register_node_macro.hpp"
 
 #include "isaac_deploy_core/inference_controller/config_parser.hpp"
+#include "isaac_common/tracing/nvtx_scope.hpp"
 #include "isaac_ros_deploy_converters/utils/tensor_list_utils.hpp"
 #include "isaac_ros_deploy_interfaces/msg/joint_command_trajectory.hpp"
 
@@ -131,8 +135,17 @@ void OutputBuilderNode::configure()
   if (config["semantic"] && config["semantic"]["scene"] &&
     config["semantic"]["scene"]["dt"].IsDefined())
   {
-    builder_config_result->policy_dt_seconds =
-      config["semantic"]["scene"]["dt"].as<double>();
+    try {
+      builder_config_result->policy_dt_seconds =
+        config["semantic"]["scene"]["dt"].as<double>();
+    } catch (const YAML::Exception &) {
+      throw std::runtime_error("semantic.scene.dt must be numeric");
+    }
+  }
+  if (!std::isfinite(builder_config_result->policy_dt_seconds) ||
+    builder_config_result->policy_dt_seconds <= 0.0)
+  {
+    throw std::runtime_error("semantic.scene.dt must be positive");
   }
 
   auto builder_result = isaac_deploy_core::OutputBuilder::create(*builder_config_result);
@@ -170,7 +183,7 @@ void OutputBuilderNode::configure()
   // Create single input subscription for the bundled TensorList.
   const auto input_topic = get_parameter("input_topic").as_string();
   input_sub_ = create_subscription<isaac_ros_tensor_msgs::msg::TensorList>(
-    input_topic, 10,
+    input_topic, 1,
     std::bind(&OutputBuilderNode::on_tensor_list, this, std::placeholders::_1));
 
   RCLCPP_INFO(
@@ -201,6 +214,15 @@ void OutputBuilderNode::create_publication_groups()
         get_logger(), "No converter for kind '%s', skipping output '%s'",
         kind.c_str(), name.c_str());
       continue;
+    }
+
+    const auto temporal_axis = output_builder_->get_temporal_axis(name);
+    if (temporal_axis.has_value() && converter->get_message_type() !=
+      "isaac_ros_deploy_interfaces/msg/JointCommandTrajectory")
+    {
+      throw std::runtime_error(
+              "Temporal metadata for output '" + name +
+              "' requires a rank-3 JointCommandTrajectory output");
     }
 
     // Default topic follows the converter's ROS message type; override
@@ -234,6 +256,7 @@ void OutputBuilderNode::create_publication_groups()
 
   // Create publishers.
   for (auto & [topic, group] : groups) {
+    configure_trajectory_timing(*group);
     group->publisher = create_generic_publisher(
       group->topic, group->message_type, rclcpp::QoS(10));
 
@@ -252,6 +275,40 @@ void OutputBuilderNode::create_publication_groups()
   }
 }
 
+void OutputBuilderNode::configure_trajectory_timing(PublicationGroup & group) const
+{
+  if (group.message_type !=
+    "isaac_ros_deploy_interfaces/msg/JointCommandTrajectory")
+  {
+    return;
+  }
+
+  std::optional<double> temporal_period;
+  for (const auto & entry : group.converters) {
+    const auto temporal_axis = output_builder_->get_temporal_axis(entry.output_name);
+    if (temporal_axis.has_value() && *temporal_axis != 1) {
+      throw std::runtime_error(
+              "JointCommandTrajectory output '" + entry.output_name +
+              "' requires temporal axis 1");
+    }
+    const auto period = output_builder_->get_temporal_period_seconds(entry.output_name);
+    if (!period.has_value()) {
+      continue;
+    }
+    if (temporal_period.has_value()) {
+      const double difference = std::abs(*temporal_period - *period);
+      const double scale = std::max(std::abs(*temporal_period), std::abs(*period));
+      if (difference > 1e-9 * scale) {
+        throw std::runtime_error(
+                "Temporal period mismatch for trajectory outputs on topic '" +
+                group.topic + "'");
+      }
+    }
+    temporal_period = period;
+  }
+  group.step_dt_seconds = temporal_period.value_or(output_builder_->get_policy_dt_seconds());
+}
+
 isaac_deploy_core::TensorDict OutputBuilderNode::extract_expected_tensors(
   const isaac_ros_tensor_msgs::msg::TensorList & msg) const
 {
@@ -268,6 +325,13 @@ isaac_deploy_core::TensorDict OutputBuilderNode::extract_expected_tensors(
 void OutputBuilderNode::on_tensor_list(
   const isaac_ros_tensor_msgs::msg::TensorList::SharedPtr msg)
 {
+  // Envelope for the GR00T output cycle: TensorList arrival -> decode -> republish. Payload is the
+  // inbound stamp, closing the chain input_publish -> inference -> output_cycle.
+  static const nvidia::isaac_ros::tracing::RegisteredName output_cycle_name{"gr00t:output_cycle"};
+  const nvidia::isaac_ros::tracing::ScopedRange output_cycle_span{
+    output_cycle_name, nvidia::isaac_ros::tracing::kColorUpdate,
+    static_cast<uint64_t>(rclcpp::Time(msg->header.stamp).nanoseconds())};
+
   // Extract tensors matching our expected outputs from the TensorList.
   bool all_received = true;
 
@@ -331,7 +395,7 @@ void OutputBuilderNode::on_tensor_list(
       auto & traj = *std::static_pointer_cast<
         isaac_ros_deploy_interfaces::msg::JointCommandTrajectory>(typed_msg);
       traj.step_dt = rclcpp::Duration::from_seconds(
-        output_builder_->get_policy_dt_seconds());
+        group->step_dt_seconds);
     }
 
     bool group_ok = true;

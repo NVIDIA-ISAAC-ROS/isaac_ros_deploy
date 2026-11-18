@@ -245,11 +245,11 @@ hardware_interface::CallbackReturn TopicBasedSystemInterface::on_activate(
   node_ = std::make_shared<rclcpp::Node>("topic_based_system_" + hw_info.name);
 
   joint_state_sub_ = node_->create_subscription<sensor_msgs::msg::JointState>(
-    topics_.joint_states, rclcpp::SystemDefaultsQoS(),
+    topics_.joint_states, rclcpp::SystemDefaultsQoS().keep_last(1),
     std::bind(&TopicBasedSystemInterface::joint_state_callback, this, std::placeholders::_1));
 
   imu_sub_ = node_->create_subscription<sensor_msgs::msg::Imu>(
-    topics_.imu, rclcpp::SystemDefaultsQoS(),
+    topics_.imu, rclcpp::SystemDefaultsQoS().keep_last(1),
     std::bind(&TopicBasedSystemInterface::imu_callback, this, std::placeholders::_1));
 
   joint_cmd_pub_ = node_->create_publisher<sensor_msgs::msg::JointState>(

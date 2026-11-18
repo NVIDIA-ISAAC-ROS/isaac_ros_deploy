@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "isaac_common/tracing/nvtx_scope.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/gain_utils.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/tensor_interface_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
@@ -50,6 +51,10 @@ controller_interface::CallbackReturn ForwardJointCommandController::on_init()
 controller_interface::CallbackReturn ForwardJointCommandController::on_configure(
   const rclcpp_lifecycle::State &)
 {
+  // Per-instance NVTX name: this controller type is instantiated several times, and a shared
+  // literal would sum the instances into one indistinguishable row.
+  nvtx_span_name_ = "ctrl:fwd_joint_cmd:" + std::string(get_node()->get_name());
+
   joint_names_ = get_node()->get_parameter("joints").as_string_array();
   command_prefix_ = get_node()->get_parameter("command_prefix").as_string();
   command_suffix_ = get_node()->get_parameter("command_suffix").as_string();
@@ -285,6 +290,9 @@ controller_interface::CallbackReturn ForwardJointCommandController::on_deactivat
 controller_interface::return_type ForwardJointCommandController::update(
   const rclcpp::Time & time, const rclcpp::Duration &)
 {
+  const nvidia::isaac_ros::tracing::ScopedRange nvtx_span{
+    nvtx_span_name_.c_str(), nvidia::isaac_ros::tracing::kColorWriteCommand};
+
   if (mode_ == Mode::Trajectory) {
     return update_trajectory(time);
   }
@@ -386,11 +394,22 @@ ForwardJointCommandController::update_trajectory(const rclcpp::Time & time)
   // Match `time`'s clock type when interpreting the wire-level header stamp,
   // so `compute_chunk_position`'s internal subtraction doesn't throw on
   // mismatched time sources (e.g. sim time vs system time).
-  const auto pos = isaac_deploy_core::compute_chunk_position(
+  const auto pos = utils::compute_chunk_position(
     rclcpp::Time(traj->header.stamp, time.get_clock_type()),
     rclcpp::Duration(traj->step_dt),
     static_cast<std::size_t>(traj->horizon),
     time);
+
+  // End-to-end sensor-to-actuator age: how stale the sampled action chunk is. A mark, not a range
+  // payload -- `traj` is only readable here under msg_mutex_, well after the range was pushed.
+  if (nvidia::isaac_ros::tracing::enabled()) {
+    const auto chunk_age = time - rclcpp::Time(traj->header.stamp, time.get_clock_type());
+    if (chunk_age.nanoseconds() > 0) {
+      static const nvidia::isaac_ros::tracing::RegisteredName kChunkAge{"ctrl:chunk_age_ns"};
+      nvidia::isaac_ros::tracing::mark_u64(
+        kChunkAge, static_cast<uint64_t>(chunk_age.nanoseconds()));
+    }
+  }
 
   if (pos.past_end) {
     auto clock = *get_node()->get_clock();
@@ -399,15 +418,16 @@ ForwardJointCommandController::update_trajectory(const rclcpp::Time & time)
       "Trajectory exhausted (past step H-1); holding last step.");
   }
 
-  const bool has_velocity = !traj->velocity.empty();
-  const bool has_effort = !traj->effort.empty();
-  const bool has_kp = !traj->kp.empty();
-  const bool has_kd = !traj->kd.empty();
   const std::size_t n_in = traj->names.size();
 
   auto interp_at = [&](const std::vector<double> & field, std::size_t col) {
-      return isaac_deploy_core::interpolate_field(
+      return utils::interpolate_field(
       std::span<const double>(field.data(), field.size()), n_in, col, pos);
+    };
+
+  auto field_has_sample = [&](const std::vector<double> & field, std::size_t col) {
+      return utils::field_has_sample(
+        std::span<const double>(field.data(), field.size()), n_in, col, pos);
     };
 
   for (size_t i = 0; i < joint_names_.size(); ++i) {
@@ -428,13 +448,13 @@ ForwardJointCommandController::update_trajectory(const rclcpp::Time & time)
     (void)command_interfaces_[position_command_indices_[i]].set_value(
       interp_at(traj->position, col));
     (void)command_interfaces_[velocity_command_indices_[i]].set_value(
-      has_velocity ? interp_at(traj->velocity, col) : 0.0);
+      field_has_sample(traj->velocity, col) ? interp_at(traj->velocity, col) : 0.0);
     (void)command_interfaces_[effort_command_indices_[i]].set_value(
-      has_effort ? interp_at(traj->effort, col) : 0.0);
+      field_has_sample(traj->effort, col) ? interp_at(traj->effort, col) : 0.0);
     (void)command_interfaces_[kp_command_indices_[i]].set_value(
-      has_kp ? interp_at(traj->kp, col) : per_joint_kp_[i]);
+      field_has_sample(traj->kp, col) ? interp_at(traj->kp, col) : per_joint_kp_[i]);
     (void)command_interfaces_[kd_command_indices_[i]].set_value(
-      has_kd ? interp_at(traj->kd, col) : per_joint_kd_[i]);
+      field_has_sample(traj->kd, col) ? interp_at(traj->kd, col) : per_joint_kd_[i]);
   }
 
   return controller_interface::return_type::OK;

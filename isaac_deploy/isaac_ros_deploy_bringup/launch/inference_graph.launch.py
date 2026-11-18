@@ -62,8 +62,10 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'publish_rate',
-            default_value='50.0',
-            description='Rate at which InputBuilderNode publishes (Hz).',
+            default_value='0.0',
+            description='Rate at which InputBuilderNode publishes (Hz). '
+                        'Zero uses pipeline.configs.frequency, falling back '
+                        'to 50 Hz when absent.',
         ),
         DeclareLaunchArgument(
             'namespace',

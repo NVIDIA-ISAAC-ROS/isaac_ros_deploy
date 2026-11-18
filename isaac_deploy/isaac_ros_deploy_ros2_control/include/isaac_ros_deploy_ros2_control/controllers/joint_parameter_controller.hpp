@@ -117,6 +117,7 @@ private:
   std::vector<std::string> joint_names_;
   double default_kp_{0.0};
   double default_kd_{0.0};
+  bool require_positive_gains_{false};
   // Slider upper bounds for kp / kd descriptors. Declared as top-level
   // params (``kp_max`` / ``kd_max``) so a robot with stiffer joints can
   // widen them without recompiling.

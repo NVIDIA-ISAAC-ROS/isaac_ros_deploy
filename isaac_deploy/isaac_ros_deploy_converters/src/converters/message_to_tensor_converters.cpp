@@ -25,6 +25,7 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
+#include "isaac_common/tracing/nvtx_scope.hpp"
 #include "isaac_ros_deploy_interfaces/msg/body_command.hpp"
 #include "isaac_ros_deploy_interfaces/msg/joint_command.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -540,6 +541,17 @@ public:
     sensor_msgs::msg::Image image;
     rclcpp::Serialization<sensor_msgs::msg::Image> serializer;
     serializer.deserialize_message(msg.get(), &image);
+
+    // Camera capture -> input build: the only leg of vision -> joint command the correlation key
+    // does not cover, since it is minted downstream in InputBuilderNode.
+    if (nvidia::isaac_ros::tracing::enabled()) {
+      static rclcpp::Clock clock{RCL_ROS_TIME};
+      const auto age = clock.now() - rclcpp::Time(image.header.stamp, RCL_ROS_TIME);
+      if (age.nanoseconds() > 0) {
+        static const nvidia::isaac_ros::tracing::RegisteredName kFrameAge{"gr00t:frame_age_ns"};
+        nvidia::isaac_ros::tracing::mark_u64(kFrameAge, static_cast<uint64_t>(age.nanoseconds()));
+      }
+    }
 
     const int64_t h = image.height;
     const int64_t w = image.width;

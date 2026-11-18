@@ -14,15 +14,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef ISAAC_DEPLOY_CORE__CHUNK_SAMPLER_HPP_
-#define ISAAC_DEPLOY_CORE__CHUNK_SAMPLER_HPP_
+#ifndef ISAAC_ROS_DEPLOY_ROS2_CONTROL__UTILS__CHUNK_SAMPLER_HPP_
+#define ISAAC_ROS_DEPLOY_ROS2_CONTROL__UTILS__CHUNK_SAMPLER_HPP_
 
 #include <span>
 #include <cstddef>
 
 #include "rclcpp/rclcpp.hpp"
 
-namespace isaac_deploy_core
+namespace isaac_ros_deploy_ros2_control::utils
 {
 
 /// Interpolation position within a uniformly-spaced chunk.
@@ -80,6 +80,17 @@ inline double interpolate_field(
   return a + pos.alpha * (b - a);
 }
 
-}  // namespace isaac_deploy_core
+/// Return whether a row-major [H, N] field contains the requested sample.
+inline bool field_has_sample(
+  std::span<const double> row_major_field,
+  std::size_t n,
+  std::size_t col,
+  const ChunkSamplePosition & pos)
+{
+  return n > 0 && col < n && row_major_field.size() > col &&
+         pos.hi <= (row_major_field.size() - (col + 1)) / n;
+}
 
-#endif  // ISAAC_DEPLOY_CORE__CHUNK_SAMPLER_HPP_
+}  // namespace isaac_ros_deploy_ros2_control::utils
+
+#endif  // ISAAC_ROS_DEPLOY_ROS2_CONTROL__UTILS__CHUNK_SAMPLER_HPP_

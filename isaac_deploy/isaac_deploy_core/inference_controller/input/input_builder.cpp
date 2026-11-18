@@ -20,8 +20,12 @@
 #include <unordered_map>
 #include <utility>
 
+#include "isaac_common/tracing/nvtx_scope.hpp"
+
 namespace isaac_deploy_core
 {
+
+namespace nvtx = ::nvidia::isaac_ros::tracing;
 
 namespace
 {
@@ -180,6 +184,9 @@ expected<void> InputBuilder::advance(
 {
   for (size_t i = 0; i < input_to_terms_.size(); ++i) {
     for (size_t term_idx : input_to_terms_[i]) {
+      // Per-term range so an expensive input is attributable rather than hidden in the
+      // infer:state_builder total. Term names come from config, hence the runtime-name variant.
+      nvtx::ScopedRange term_span{terms_[term_idx].name().c_str(), nvtx::kColorInputTerm};
       auto result = terms_[term_idx].advance(inputs[i].tensor, term_outputs_[term_idx]);
       if (!result.has_value()) {
         return tl::unexpected(result.error());

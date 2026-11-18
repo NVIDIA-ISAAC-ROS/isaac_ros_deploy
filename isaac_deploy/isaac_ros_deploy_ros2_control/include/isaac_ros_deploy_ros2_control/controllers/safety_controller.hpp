@@ -148,6 +148,11 @@ private:
   std::shared_ptr<JointCommandPublisher> blended_command_realtime_publisher_;
   JointCommandMsg blended_command_msg_;
 
+  // NVTX range name, resolved per instance in on_configure. Plain std::string so this header
+  // stays independent of the NVTX build flag.
+  std::string nvtx_span_name_;
+
+
   // Core controller.
   std::optional<isaac_deploy_core::SafetyController> safety_controller_;
 

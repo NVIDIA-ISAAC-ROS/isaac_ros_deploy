@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -78,6 +79,12 @@ public:
     /// Get the flattened element names for a given output term (last non-empty dim).
     /// Used by converters to populate message field names (e.g., joint names in JointCommand).
   std::vector<std::string> get_element_names(const std::string & output_name) const;
+
+  /// Return LEAPP's temporal sample period for an output, in seconds.
+  std::optional<double> get_temporal_period_seconds(const std::string & output_name) const;
+
+  /// Return the temporal axis declared for an output.
+  std::optional<std::size_t> get_temporal_axis(const std::string & output_name) const;
 
     /// Returns the policy's scene.dt in seconds (from the config YAML).
     /// Defaults to 1/30 s (30 Hz) if semantic.scene.dt is not declared.

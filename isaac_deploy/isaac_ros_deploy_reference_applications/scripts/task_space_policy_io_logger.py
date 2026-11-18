@@ -128,6 +128,9 @@ class TaskSpacePolicyIoLogger(Node):
         self.csv_writer = None
         self.csv_fieldnames: List[str] = []
 
+        # Tensor messages are correlated into per-step diagnostic rows. Keep a
+        # short receive history so executor delay does not silently lose one
+        # side of a pair; this node is not on the control path.
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
@@ -140,6 +143,9 @@ class TaskSpacePolicyIoLogger(Node):
         self.create_subscription(
             TensorList, str(self.get_parameter('output_tensor_topic').value),
             self._output_cb, qos)
+        # Commands and targets have no common correlation stamp and are paired
+        # by arrival order. Preserve their short ordered histories so dropping
+        # one side cannot silently associate a target with a newer command.
         self.create_subscription(
             CartesianPoseDeltaCommand,
             str(self.get_parameter('pose_delta_command_topic').value),

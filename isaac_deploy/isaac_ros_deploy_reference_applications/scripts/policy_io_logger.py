@@ -202,7 +202,9 @@ class PolicyIoLogger(Node):
 
         # ── QoS: best-effort to match the controller's debug publishers.
         #     A best-effort subscription is also compatible with the reliable
-        #     goal_pose / joint_states publishers.
+        #     goal_pose / joint_states publishers. This diagnostic node records
+        #     every action step, so retain a short history instead of only the
+        #     latest sample.
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,

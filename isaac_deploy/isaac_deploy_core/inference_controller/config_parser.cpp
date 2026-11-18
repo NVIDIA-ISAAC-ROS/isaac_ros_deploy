@@ -16,6 +16,7 @@
 
 #include "isaac_deploy_core/inference_controller/config_parser.hpp"
 
+#include <cmath>
 #include <unordered_set>
 #include <utility>
 
@@ -100,6 +101,38 @@ parse_required_non_empty_connection_map(
   return result;
 }
 
+expected<std::optional<double>> parse_pipeline_frequency(const YAML::Node & configs)
+{
+  if (!configs.IsDefined() || configs.IsNull()) {
+    return std::nullopt;
+  }
+  if (!configs.IsMap()) {
+    return tl::unexpected(
+      make_error(
+        Error::Code::kInvalidArgument,
+        "pipeline.configs must be a map"));
+  }
+  if (!configs["frequency"].IsDefined()) {
+    return std::nullopt;
+  }
+
+  try {
+    const double frequency = configs["frequency"].as<double>();
+    if (!std::isfinite(frequency) || frequency <= 0.0) {
+      return tl::unexpected(
+        make_error(
+          Error::Code::kInvalidArgument,
+          "pipeline.configs.frequency must be positive"));
+    }
+    return frequency;
+  } catch (const YAML::Exception &) {
+    return tl::unexpected(
+      make_error(
+        Error::Code::kInvalidArgument,
+        "pipeline.configs.frequency must be numeric"));
+  }
+}
+
 }    // namespace
 
 expected<GraphConfig> parse_graph_config(const YAML::Node & root)
@@ -140,6 +173,12 @@ expected<GraphConfig> parse_graph_config(const YAML::Node & root)
     if (pipeline["initial_values"].IsDefined()) {
       graph.initial_values_path = pipeline["initial_values"].as<std::string>();
     }
+
+    auto frequency = parse_pipeline_frequency(pipeline["configs"]);
+    if (!frequency.has_value()) {
+      return tl::unexpected(frequency.error());
+    }
+    graph.frequency_hz = *frequency;
   }
 
     // Parse each model in YAML insertion order.

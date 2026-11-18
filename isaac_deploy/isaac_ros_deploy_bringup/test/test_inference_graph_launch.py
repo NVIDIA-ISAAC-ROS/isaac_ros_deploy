@@ -48,7 +48,7 @@ def test_csv_string_to_list_strips_empty_and_whitespace_entries():
     assert csv_string_to_list('') == []
     assert csv_string_to_list(' ') == []
     assert csv_string_to_list('policy') == ['policy']
-    assert csv_string_to_list(' policy , critic , ') == ["policy', 'critic"]
+    assert csv_string_to_list(' policy , critic , ') == ['policy', 'critic']
 
 
 def test_triton_cpu_models_are_forwarded_to_model_repo_creation():

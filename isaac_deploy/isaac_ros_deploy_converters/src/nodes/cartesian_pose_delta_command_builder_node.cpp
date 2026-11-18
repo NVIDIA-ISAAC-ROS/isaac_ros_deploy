@@ -220,7 +220,7 @@ CartesianPoseDeltaCommandBuilderNode::CartesianPoseDeltaCommandBuilderNode(
   }
   enabled_ = get_parameter("enabled_on_start").as_bool();
 
-  auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
+  auto qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort().durability_volatile();
   publisher_ = create_publisher<isaac_ros_deploy_interfaces::msg::CartesianPoseDeltaCommand>(
     output_topic, 10);
   observation_sub_ = create_subscription<isaac_ros_tensor_msgs::msg::TensorList>(
@@ -235,7 +235,7 @@ CartesianPoseDeltaCommandBuilderNode::CartesianPoseDeltaCommandBuilderNode(
   const auto enable_topic = get_parameter("enable_topic").as_string();
   if (!enable_topic.empty()) {
     enable_sub_ = create_subscription<std_msgs::msg::Bool>(
-      enable_topic, 10,
+      enable_topic, 1,
       std::bind(
         &CartesianPoseDeltaCommandBuilderNode::enable_callback, this, std::placeholders::_1));
   } else {

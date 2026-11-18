@@ -72,6 +72,7 @@ private:
     std::string topic;
     std::string message_type;
     std::vector<OutputConverterEntry> converters;
+    double step_dt_seconds = 0.0;
     rclcpp::GenericPublisher::SharedPtr publisher;
   };
 
@@ -87,6 +88,9 @@ private:
 
   /// Create publication groups from OutputBuilder metadata.
   void create_publication_groups();
+
+  /// Validate trajectory temporal metadata and configure its sample period.
+  void configure_trajectory_timing(PublicationGroup & group) const;
 
   /// Path to configuration file.
   std::string config_path_;
