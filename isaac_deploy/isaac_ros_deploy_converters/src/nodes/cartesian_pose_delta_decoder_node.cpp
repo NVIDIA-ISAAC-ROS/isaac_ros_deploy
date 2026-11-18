@@ -251,13 +251,13 @@ CartesianPoseDeltaDecoderNode::CartesianPoseDeltaDecoderNode(
   publisher_ = create_publisher<geometry_msgs::msg::PoseStamped>(output_topic, 10);
   subscription_ =
     create_subscription<isaac_ros_deploy_interfaces::msg::CartesianPoseDeltaCommand>(
-    input_topic, 10,
+    input_topic, 1,
     std::bind(&CartesianPoseDeltaDecoderNode::command_callback, this, std::placeholders::_1));
 
   const auto enable_topic = get_parameter("enable_topic").as_string();
   if (!enable_topic.empty()) {
     enable_sub_ = create_subscription<std_msgs::msg::Bool>(
-      enable_topic, 10,
+      enable_topic, 1,
       std::bind(&CartesianPoseDeltaDecoderNode::enable_callback, this, std::placeholders::_1));
   } else {
     // With no gate topic there is nothing that could ever open the gate, so an

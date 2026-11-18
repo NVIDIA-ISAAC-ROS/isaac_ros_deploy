@@ -27,6 +27,7 @@
 #include <rcl_interfaces/msg/parameter_descriptor.hpp>
 #include <urdf/model.hpp>
 
+#include "isaac_common/tracing/nvtx_scope.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/gain_utils.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/tensor_interface_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
@@ -159,6 +160,15 @@ controller_interface::CallbackReturn JointParameterController::on_init()
     get_node()->declare_parameter(
       "default_kd", rclcpp::ParameterValue(0.0), default_kd_desc);
 
+    rcl_interfaces::msg::ParameterDescriptor require_positive_gains_desc;
+    require_positive_gains_desc.description =
+      "Reject activation and runtime updates unless every per-joint kp and kd are "
+      "strictly positive. Configure-time only; use for hardware that must "
+      "never enter impedance mode with zero stiffness or damping.";
+    require_positive_gains_desc.read_only = true;
+    get_node()->declare_parameter(
+      "require_positive_gains", rclcpp::ParameterValue(false), require_positive_gains_desc);
+
     // Slider upper bounds for the per-joint kp / kd sliders, baked into each
     // FloatingPointRange at on_configure time. The descriptor is immutable
     // once declared, so these are read_only (see descriptions below).
@@ -220,6 +230,7 @@ controller_interface::CallbackReturn JointParameterController::on_configure(
     joint_names_ = get_node()->get_parameter("joints").as_string_array();
     default_kp_ = get_node()->get_parameter("default_kp").as_double();
     default_kd_ = get_node()->get_parameter("default_kd").as_double();
+    require_positive_gains_ = get_node()->get_parameter("require_positive_gains").as_bool();
     kp_max_ = get_node()->get_parameter("kp_max").as_double();
     kd_max_ = get_node()->get_parameter("kd_max").as_double();
     position_target_fallback_min_ =
@@ -286,7 +297,7 @@ controller_interface::CallbackReturn JointParameterController::on_configure(
   // visible in ``ros2 param list`` / rqt / Foxglove immediately after
   // configure. Each parameter is given a ParameterDescriptor with a
   // FloatingPointRange so rqt renders it as a bounded slider.
-  {
+  try {
     std::lock_guard<std::mutex> lock(setpoint_mutex_);
     joint_setpoints_.assign(joint_names_.size(), JointSetpoint{});
     for (size_t i = 0; i < joint_names_.size(); ++i) {
@@ -344,7 +355,21 @@ controller_interface::CallbackReturn JointParameterController::on_configure(
         get_node()->get_parameter(kd_name).as_double();
       joint_setpoints_[i].position_target =
         get_node()->get_parameter(position_name).as_double();
+
+      if (!std::isfinite(joint_setpoints_[i].kp) ||
+        !std::isfinite(joint_setpoints_[i].kd) ||
+        !std::isfinite(joint_setpoints_[i].position_target))
+      {
+        RCLCPP_ERROR(
+          get_node()->get_logger(),
+          "Initial setpoints for joint '%s' must be finite", jn.c_str());
+        return controller_interface::CallbackReturn::ERROR;
+      }
     }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(
+      get_node()->get_logger(), "Failed to initialize per-joint parameters: %s", e.what());
+    return controller_interface::CallbackReturn::ERROR;
   }
 
   // Register the runtime parameter callback so CLI / GUI updates flow
@@ -407,6 +432,22 @@ controller_interface::CallbackReturn JointParameterController::on_activate(
   kp_command_indices_.clear();
   kd_command_indices_.clear();
   position_state_indices_.clear();
+
+  if (require_positive_gains_) {
+    std::lock_guard<std::mutex> setpoint_lock(setpoint_mutex_);
+    for (size_t i = 0; i < joint_setpoints_.size(); ++i) {
+      if (!std::isfinite(joint_setpoints_[i].kp) ||
+        !std::isfinite(joint_setpoints_[i].kd) ||
+        joint_setpoints_[i].kp <= 0.0 || joint_setpoints_[i].kd <= 0.0)
+      {
+        RCLCPP_ERROR(
+          get_node()->get_logger(),
+          "Joint '%s' has kp=%.6f and kd=%.6f; finite, positive gains are required for activation",
+          joint_names_[i].c_str(), joint_setpoints_[i].kp, joint_setpoints_[i].kd);
+        return controller_interface::CallbackReturn::ERROR;
+      }
+    }
+  }
 
   std::vector<std::string> position_names, velocity_names, effort_names, kp_names, kd_names;
   position_names.reserve(joint_names_.size());
@@ -552,6 +593,8 @@ controller_interface::CallbackReturn JointParameterController::on_cleanup(
 controller_interface::return_type JointParameterController::update(
   const rclcpp::Time &, const rclcpp::Duration &)
 {
+  ISAAC_DEPLOY_NVTX_SCOPE("ctrl:joint_params", nvidia::isaac_ros::tracing::kColorTopicInput);
+
   const size_t joint_count = joint_names_.size();
   // Snapshot the setpoints under the lock. A small copy keeps the update()
   // loop deterministic even while parameters are being set.
@@ -635,6 +678,12 @@ rcl_interfaces::msg::SetParametersResult JointParameterController::on_parameters
       if (!std::isfinite(value)) {
         result.successful = false;
         result.reason = name + " must be finite";
+        continue;
+      }
+
+      if ((is_kp || is_kd) && require_positive_gains_ && value <= 0.0) {
+        result.successful = false;
+        result.reason = name + " must be positive";
         continue;
       }
 

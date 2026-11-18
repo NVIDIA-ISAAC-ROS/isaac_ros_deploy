@@ -70,6 +70,53 @@ TEST(ConfigParserTest, ParseMinimalConfig) {
     EXPECT_TRUE(result->feedback_flow.empty());
 }
 
+TEST(ConfigParserTest, ParseLeappGraphConfigs) {
+    auto yaml = YAML::Load(
+      R"(
+      models:
+        policy:
+          inputs: []
+          outputs: []
+      pipeline:
+        configs:
+          frequency: 50
+    )");
+    auto result = parse_graph_config(yaml);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result->frequency_hz.has_value());
+    EXPECT_DOUBLE_EQ(*result->frequency_hz, 50.0);
+}
+
+TEST(ConfigParserTest, RejectInvalidLeappGraphFrequency) {
+    auto yaml = YAML::Load(
+      R"(
+      models:
+        policy:
+          inputs: []
+          outputs: []
+      pipeline:
+        configs:
+          frequency: 0
+    )");
+    auto result = parse_graph_config(yaml);
+    expect_graph_error_contains(result, "pipeline.configs.frequency must be positive");
+}
+
+TEST(ConfigParserTest, TreatsNullPipelineConfigsAsAbsent) {
+    auto yaml = YAML::Load(
+      R"(
+      models:
+        policy:
+          inputs: []
+          outputs: []
+      pipeline:
+        configs:
+    )");
+    auto result = parse_graph_config(yaml);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FALSE(result->frequency_hz.has_value());
+}
+
 TEST(ConfigParserTest, ParseFeedbackFlow) {
     auto yaml =
     YAML::Load(

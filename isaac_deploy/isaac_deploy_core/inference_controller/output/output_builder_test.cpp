@@ -99,4 +99,22 @@ TEST(OutputBuilderTest, SceneDtSecondsRespectsConfig) {
     EXPECT_DOUBLE_EQ(result->get_policy_dt_seconds(), 0.04);
 }
 
+TEST(OutputBuilderTest, ExposesLeappTemporalPeriodInSeconds) {
+    OutputBuilder::Config config {
+    .terms = {{.name = "trajectory",
+      .kind = "target/joint/position",
+      .shape = {1, 4, 3},
+      .temporal_axis = 1,
+      .temporal_period_ms = 20.0}}
+    };
+    auto result = OutputBuilder::create(config);
+    ASSERT_TRUE(result.has_value());
+    auto period = result->get_temporal_period_seconds("trajectory");
+    ASSERT_TRUE(period.has_value());
+    EXPECT_DOUBLE_EQ(*period, 0.02);
+    EXPECT_EQ(result->get_temporal_axis("trajectory"), 1U);
+    EXPECT_FALSE(result->get_temporal_period_seconds("missing").has_value());
+    EXPECT_FALSE(result->get_temporal_axis("missing").has_value());
+}
+
 }  // namespace isaac_deploy_core

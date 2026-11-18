@@ -17,6 +17,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -65,6 +66,12 @@ struct SubscriptionGroup
   std::shared_ptr<rclcpp::SerializedMessage> latest_msg;
   /// Time when latest message was received.
   rclcpp::Time receive_time{0, 0, RCL_ROS_TIME};
+  /// Messages received on this topic. Monotonic: latest_msg is a latch that is overwritten but
+  /// never cleared, so drops are the delta between consecutive marks, not a per-message flag.
+  uint64_t received{0};
+  /// NVTX mark labels, built once so the build path does not allocate per tick.
+  std::string mark_received;
+  std::string mark_latch_age;
   /// Mutex for thread-safe access.
   std::mutex mutex;
   /// True when every converter in the group has an initial value, i.e. the group
@@ -83,7 +90,8 @@ struct SubscriptionGroup
 ///
 /// Parameters:
 /// - config_path: Path to YAML configuration file
-/// - publish_rate: Rate at which to publish TensorList (Hz)
+/// - publish_rate: Rate at which to publish TensorList (Hz). Zero (the default) uses
+///   pipeline.configs.frequency, or 50 Hz when the bundle does not declare it.
 /// - source_to_topic.<source>: ROS topic to subscribe to for a given source
 ///   (defaults to the source name itself)
 /// - output_topic: Topic name for the output TensorList (default: "input_tensors")

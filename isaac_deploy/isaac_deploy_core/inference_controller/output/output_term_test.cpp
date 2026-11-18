@@ -37,6 +37,106 @@ TEST(OutputTermTest, CreateFailsWithEmptyName) {
     EXPECT_FALSE(result.has_value());
 }
 
+TEST(OutputTermTest, ParsesLeappTemporalAxis) {
+    auto yaml = YAML::Load(
+      R"(
+      name: actions
+      shape: [1, 4, 3]
+      element_names:
+      - __temporal_axis__
+      - [hip, knee, ankle]
+      temporal_period_ms: 100
+    )");
+    auto result = OutputTermConfig::create_from_yaml(yaml);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result->temporal_axis.has_value());
+    EXPECT_EQ(*result->temporal_axis, 1U);
+    ASSERT_TRUE(result->temporal_period_ms.has_value());
+    EXPECT_DOUBLE_EQ(*result->temporal_period_ms, 100.0);
+    EXPECT_TRUE(result->element_names[1].empty());
+    EXPECT_EQ(result->element_names[2], std::vector<std::string>({"hip", "knee", "ankle"}));
+}
+
+TEST(OutputTermTest, RejectsInvalidLeappTemporalPeriod) {
+    auto yaml = YAML::Load(
+      R"(
+      name: actions
+      shape: [1, 4, 3]
+      element_names: [__temporal_axis__, [hip, knee, ankle]]
+      temporal_period_ms: 0
+    )");
+    auto result = OutputTermConfig::create_from_yaml(yaml);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().message.find("must be positive"), std::string::npos);
+}
+
+TEST(OutputTermTest, LeavesTrajectoryAxisValidationToMiddlewareAdapter) {
+    auto yaml = YAML::Load(
+      R"(
+      name: actions
+      kind: actions
+      shape: [1, 3, 4]
+      element_names: [[hip, knee, ankle], __temporal_axis__]
+      temporal_period_ms: 100
+    )");
+    auto result = OutputTermConfig::create_from_yaml(yaml);
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result->temporal_axis.has_value());
+    EXPECT_EQ(*result->temporal_axis, 2U);
+}
+
+TEST(OutputTermTest, IgnoresIncompleteTemporalMetadataForCompatibility) {
+    auto yaml = YAML::Load(
+      R"(
+      name: actions
+      shape: [1, 4, 3]
+      element_names: [__temporal_axis__, [hip, knee, ankle]]
+    )");
+    auto result = OutputTermConfig::create_from_yaml(yaml);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_FALSE(result->temporal_axis.has_value());
+    EXPECT_FALSE(result->temporal_period_ms.has_value());
+}
+
+TEST(OutputTermTest, TreatsNullMetadataAsAbsent) {
+    auto yaml = YAML::Load(
+      R"(
+      name: actions
+      shape: [1, 3]
+      element_names:
+      temporal_period_ms: ~
+    )");
+    auto result = OutputTermConfig::create_from_yaml(yaml);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->element_names.empty());
+    EXPECT_FALSE(result->temporal_period_ms.has_value());
+}
+
+TEST(OutputTermTest, PreservesOverlongElementNamesForCompatibility) {
+    auto yaml = YAML::Load(
+      R"(
+      name: actions
+      shape: [1, 3]
+      element_names: [[], [], [hip, knee, ankle]]
+    )");
+    auto result = OutputTermConfig::create_from_yaml(yaml);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(result->element_names.size(), 3U);
+}
+
+TEST(OutputTermTest, ReportsMalformedElementNamesWithContext) {
+    auto yaml = YAML::Load(
+      R"(
+      name: actions
+      shape: [1, 3]
+      element_names: [[{bad: value}]]
+    )");
+    auto result = OutputTermConfig::create_from_yaml(yaml);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_NE(result.error().message.find("OutputTermConfig"), std::string::npos);
+    EXPECT_NE(result.error().message.find("only strings"), std::string::npos);
+}
+
 TEST(OutputTermTest, SimplePassthrough) {
     OutputTermConfig config {.name = "out", .kind = "out", .shape = {1, 3}};
     auto term_result = OutputTerm::create(config);

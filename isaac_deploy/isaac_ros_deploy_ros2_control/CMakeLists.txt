@@ -29,6 +29,7 @@ find_package(ament_cmake_python REQUIRED)
 # Find isaac_deploy_core first - it exports LibTorch and ONNX Runtime for us.
 find_package(isaac_deploy_core REQUIRED)
 find_package(isaac_ros_deploy_converters REQUIRED)
+find_package(isaac_common REQUIRED)
 
 find_package(controller_interface REQUIRED)
 find_package(controller_manager_msgs REQUIRED)
@@ -48,6 +49,16 @@ find_package(isaac_ros_inverse_dynamics REQUIRED)
 # LibTorch is provided by isaac_deploy_core via isaac_deploy_core-extras.cmake.
 # The Torch package is already found, and TORCH_INSTALL_PREFIX is set.
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+
+# nvtx_scope.hpp is included unconditionally and compiles to no-ops without USE_NVTX, so its
+# include path is required in both configurations; only the CUDA path is gated.
+include_directories(${isaac_common_INCLUDE_DIRS})
+option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+if(USE_NVTX)
+  find_package(CUDAToolkit REQUIRED)
+  add_definitions(-DUSE_NVTX)
+  include_directories(${CUDAToolkit_INCLUDE_DIRS})
+endif()
 
 # =============================================================================
 # Safety Controller - Interfaces
@@ -285,6 +296,10 @@ install(
 )
 
 
+# Downstream launch tests import this module even when this package is built
+# without its own tests (for example, when installed from a Debian package).
+ament_python_install_module(test/test_utils/mujoco_test_helpers.py)
+
 # Testing.
 if(BUILD_TESTING)
 
@@ -293,13 +308,6 @@ if(BUILD_TESTING)
     DIRECTORY test/test_utils/
     DESTINATION lib/${PROJECT_NAME}/test_utils
   )
-  ament_get_python_install_dir(_python_install_dir)
-  if(_python_install_dir)
-    install(
-      FILES test/test_utils/mujoco_test_helpers.py
-      DESTINATION "${_python_install_dir}"
-    )
-  endif()
   find_package(ament_cmake_gtest REQUIRED)
 
   # Helper function to add a converter test target.
@@ -413,14 +421,11 @@ if(BUILD_TESTING)
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )
 
-  # ForwardJointCommandController trajectory-mode sampling smoke test.
-  ament_add_gtest(test_forward_joint_command_controller_trajectory
-    test/test_forward_joint_command_controller_trajectory.cpp)
-  ament_target_dependencies(test_forward_joint_command_controller_trajectory
-    rclcpp
-    isaac_ros_deploy_interfaces
-    isaac_deploy_core
+  ament_add_gtest(test_chunk_sampler test/test_chunk_sampler.cpp)
+  target_include_directories(test_chunk_sampler PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   )
+  ament_target_dependencies(test_chunk_sampler rclcpp)
 endif()
 
 ament_export_targets(isaac_ros_deploy_ros2_control_targets HAS_LIBRARY_TARGET)

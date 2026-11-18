@@ -261,6 +261,93 @@ def test_missing_backend_is_rejected_with_clear_message(tmp_path, monkeypatch):
     assert not called
 
 
+@pytest.mark.parametrize(
+    ("section", "role"),
+    [
+        ("feedback_flow", "key"),
+        ("feedback_flow", "target"),
+        ("data_flow", "key"),
+        ("data_flow", "target"),
+    ],
+)
+def test_malformed_pipeline_reference_is_rejected_before_repo_creation(
+    tmp_path, monkeypatch, section, role
+):
+    """Every pipeline connection endpoint must use a qualified reference."""
+    config = (
+        _single_model_config()
+        if section == "feedback_flow"
+        else _multi_model_config()
+    )
+    connections = config["pipeline"][section]
+    original_key, targets = next(iter(connections.items()))
+    del connections[original_key]
+    if role == "key":
+        connections["malformed"] = targets
+    else:
+        connections[original_key] = ["malformed"]
+
+    create_calls = []
+
+    def _record_create(*args, **kwargs):
+        create_calls.append((args, kwargs))
+        return False
+
+    monkeypatch.setattr(repo, "_create_model_dir", _record_create)
+
+    config_path = tmp_path / "config.yaml"
+    output_dir = tmp_path / "repo"
+    _write_yaml(config_path, config)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"pipeline\.{section} {role} 'malformed'.*<model>/<tensor>",
+    ):
+        repo.create_triton_model_repo(config_path, output_dir)
+
+    assert not create_calls
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "/tensor",
+        "model/",
+        "model/tensor/extra",
+        17,
+    ],
+)
+def test_pipeline_reference_requires_exactly_one_separator(
+    tmp_path, monkeypatch, reference
+):
+    """Qualified references require one separator and two non-empty names."""
+    config = _single_model_config()
+    config["pipeline"]["feedback_flow"] = {
+        reference: ["policy/feedback"],
+    }
+    create_calls = []
+
+    def _record_create(*args, **kwargs):
+        create_calls.append((args, kwargs))
+        return False
+
+    monkeypatch.setattr(repo, "_create_model_dir", _record_create)
+
+    config_path = tmp_path / "config.yaml"
+    output_dir = tmp_path / "repo"
+    _write_yaml(config_path, config)
+
+    with pytest.raises(
+        ValueError,
+        match=r"pipeline\.feedback_flow key .*<model>/<tensor>",
+    ):
+        repo.create_triton_model_repo(config_path, output_dir)
+
+    assert not create_calls
+    assert not output_dir.exists()
+
+
 def test_external_onnx_data_is_materialized_inside_model_directory(
     tmp_path, monkeypatch
 ):

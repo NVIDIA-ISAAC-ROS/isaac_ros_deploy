@@ -24,7 +24,7 @@
 #include <controller_interface/controller_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
 
-#include "isaac_deploy_core/chunk_sampler.hpp"
+#include "isaac_ros_deploy_ros2_control/utils/chunk_sampler.hpp"
 #include "isaac_ros_deploy_interfaces/msg/joint_command.hpp"
 #include "isaac_ros_deploy_interfaces/msg/joint_command_trajectory.hpp"
 #include "isaac_ros_deploy_ros2_control/utils/gain_utils.hpp"
@@ -70,6 +70,10 @@ private:
     JointState,   ///< joint_state_topic non-empty
     Trajectory,   ///< joint_command_trajectory_topic non-empty
   };
+
+  // NVTX range name, resolved per instance in on_configure. Plain std::string so this header
+  // stays independent of the NVTX build flag.
+  std::string nvtx_span_name_;
 
   // Parameters.
   std::vector<std::string> joint_names_;

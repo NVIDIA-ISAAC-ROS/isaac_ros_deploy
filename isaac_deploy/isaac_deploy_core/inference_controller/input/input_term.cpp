@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "isaac_deploy_core/core/tensor_utils.hpp"
+#include "isaac_deploy_core/inference_controller/term_metadata.hpp"
 
 namespace isaac_deploy_core
 {
@@ -70,16 +71,11 @@ expected<InputTermConfig> InputTermConfig::create_from_yaml(const YAML::Node & y
   }
   config.shape = yaml["shape"].as<std::vector<int64_t>>();
 
-  if (yaml["element_names"]) {
-    for (const auto & dim : yaml["element_names"]) {
-      config.element_names.push_back(dim.as<std::vector<std::string>>());
-    }
-      // Right-align element_names with shape dimensions: pad with empty lists at front.
-      // A user may omit the batch dimension.
-    while (config.element_names.size() < config.shape.size()) {
-      config.element_names.insert(config.element_names.begin(), std::vector<std::string>{});
-    }
+  auto element_names = parse_term_element_names(yaml, config.shape, "InputTermConfig");
+  if (!element_names.has_value()) {
+    return tl::unexpected(element_names.error());
   }
+  config.element_names = std::move(*element_names);
 
   return config;
 }

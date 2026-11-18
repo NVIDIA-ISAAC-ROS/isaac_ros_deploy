@@ -28,6 +28,7 @@ find_package(ament_cmake_python REQUIRED)
 
 # Find isaac_deploy_core first - it exports LibTorch and ONNX Runtime for us.
 find_package(isaac_deploy_core REQUIRED)
+find_package(isaac_common REQUIRED)
 
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
@@ -48,6 +49,15 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 # =============================================================================
 # Converters Library (message-to-tensor, shared with isaac_ros_deploy_ros2_control)
 # =============================================================================
+
+# nvtx_scope.hpp is included unconditionally and compiles to no-ops without USE_NVTX, so its
+# include path is required in both configurations; only the CUDA path is gated.
+include_directories(${isaac_common_INCLUDE_DIRS})
+option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+if(USE_NVTX)
+  add_definitions(-DUSE_NVTX)
+  include_directories(${CUDAToolkit_INCLUDE_DIRS})
+endif()
 
 add_library(converters SHARED
   src/converters/message_to_tensor_converters.cpp
@@ -340,6 +350,46 @@ if(BUILD_TESTING)
     isaac_ros_deploy_interfaces
   )
   set_target_properties(test_joint_command_trajectory_converter PROPERTIES
+    INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  )
+
+  ament_add_gtest(test_input_builder_node
+    test/test_input_builder_node.cpp
+  )
+  target_link_libraries(test_input_builder_node
+    isaac_ros_deploy_converters_lib
+    ${TORCH_LIBRARIES}
+  )
+  target_include_directories(test_input_builder_node PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(test_input_builder_node
+    rclcpp
+    isaac_ros_tensor_msgs
+  )
+  set_target_properties(test_input_builder_node PROPERTIES
+    INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+    BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
+  )
+
+  ament_add_gtest(test_output_builder_node
+    test/test_output_builder_node.cpp
+  )
+  target_link_libraries(test_output_builder_node
+    isaac_ros_deploy_converters_lib
+    tensor_list_utils
+    ${TORCH_LIBRARIES}
+  )
+  target_include_directories(test_output_builder_node PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  )
+  ament_target_dependencies(test_output_builder_node
+    rclcpp
+    isaac_ros_tensor_msgs
+    isaac_ros_deploy_interfaces
+  )
+  set_target_properties(test_output_builder_node PROPERTIES
     INSTALL_RPATH "${TORCH_INSTALL_PREFIX}/lib"
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib"
   )

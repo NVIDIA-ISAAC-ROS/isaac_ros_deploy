@@ -11,7 +11,9 @@ if [[ -z ${ISAAC_SIM_PACKAGE_PATH:-} ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROS2_BRIDGE_LIB_DIR="${ISAAC_SIM_PACKAGE_PATH}/exts/isaacsim.ros2.core/jazzy/lib"
+ROS_DISTRO="${DISPLAYPORT_PLAY_ROS_DISTRO:-jazzy}"
+export ROS_DISTRO
+ROS2_BRIDGE_LIB_DIR="${ISAAC_SIM_PACKAGE_PATH}/exts/isaacsim.ros2.core/${ROS_DISTRO}/lib"
 
 if [[ -d ${ROS2_BRIDGE_LIB_DIR} ]]; then
   export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:${ROS2_BRIDGE_LIB_DIR}"

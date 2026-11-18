@@ -26,6 +26,7 @@
 #include <string>
 #include <unordered_set>
 
+#include "isaac_common/tracing/nvtx_scope.hpp"
 #include "isaac_deploy_core/inference_controller/config_parser.hpp"
 #include "isaac_deploy_core/inference_controller/safetensors_loader.hpp"
 #include "isaac_ros_deploy_ros2_control/adapters/command_interface_adapter.hpp"
@@ -499,7 +500,7 @@ void InferenceController::create_topic_subscriptions()
       };
 
     group->subscription = get_node()->create_generic_subscription(
-      topic, group->message_type, rclcpp::QoS(10), callback);
+      topic, group->message_type, rclcpp::QoS(1), callback);
 
     std::string sources_str;
     for (const auto & entry : group->entries) {
@@ -848,6 +849,14 @@ controller_interface::CallbackReturn InferenceController::on_deactivate(
 controller_interface::return_type InferenceController::update(
   const rclcpp::Time & time, const rclcpp::Duration &)
 {
+  // Names the controller_manager update thread -- the RT loop every ctrl:* and runner:* range sits
+  // on, which is what makes preemption legible against nsys's context-switch rows.
+  nvidia::isaac_ros::tracing::name_thread("ctrl:rt_loop");
+
+  // This controller's slice of every control cycle, including the decimated no-ops. It does NOT
+  // bracket the loop -- the other controllers and hw:write are siblings, not children.
+  ISAAC_DEPLOY_NVTX_SCOPE("ctrl:inference_tick", nvidia::isaac_ros::tracing::kColorReadState);
+
   if (!inference_controller_) {
     return controller_interface::return_type::ERROR;
   }
@@ -858,6 +867,12 @@ controller_interface::return_type InferenceController::update(
     return controller_interface::return_type::OK;
   }
   update_counter_ = 0;
+
+  // End-to-end envelope: joint state in -> joint command out. Opened after the decimation
+  // early-return, so it covers only cycles that actually run inference.
+  static const nvidia::isaac_ros::tracing::RegisteredName update_name{"ctrl:update"};
+  const nvidia::isaac_ros::tracing::ScopedRange update_span{
+    update_name, nvidia::isaac_ros::tracing::kColorUpdate};
 
   const int64_t timestamp_ns = time.nanoseconds();
 
@@ -881,11 +896,15 @@ controller_interface::return_type InferenceController::update(
   }
 
   // Update hardware inputs (RT-safe: reads into pre-allocated tensors).
+  static const nvidia::isaac_ros::tracing::RegisteredName read_state_name{"ctrl:read_state"};
+  nvidia::isaac_ros::tracing::ScopedRange read_state_span{
+    read_state_name, nvidia::isaac_ros::tracing::kColorReadState};
   for (size_t i = 0; i < state_adapter_->get_num_hardware_inputs(); ++i) {
     const size_t input_idx = hw_to_input_idx_[i];
     state_adapter_->read_tensor(i, inputs_[input_idx].tensor);
     inputs_[input_idx].timestamp_ns = timestamp_ns;
   }
+  read_state_span.end();
 
   if (!topic_inputs_are_fresh(timestamp_ns)) {
     command_adapter_->invalidate_command_interfaces();
@@ -898,6 +917,9 @@ controller_interface::return_type InferenceController::update(
   }
 
   // Update topic inputs from latest messages via converters.
+  static const nvidia::isaac_ros::tracing::RegisteredName topic_inputs_name{"ctrl:topic_inputs"};
+  nvidia::isaac_ros::tracing::ScopedRange topic_inputs_span{
+    topic_inputs_name, nvidia::isaac_ros::tracing::kColorTopicInput};
   for (const auto & group : topic_groups_) {
     const auto sample = *group->rt_msg_buffer.readFromRT();
     if (!sample || !sample->message) {continue;}
@@ -910,6 +932,7 @@ controller_interface::return_type InferenceController::update(
       }
     }
   }
+  topic_inputs_span.end();
 
   // Run inference.
   auto result = inference_controller_->advance(inputs_, outputs_);
@@ -931,6 +954,9 @@ controller_interface::return_type InferenceController::update(
   }
 
   // Write outputs to command interfaces.
+  static const nvidia::isaac_ros::tracing::RegisteredName write_cmd_name{"ctrl:write_cmd"};
+  nvidia::isaac_ros::tracing::ScopedRange write_cmd_span{
+    write_cmd_name, nvidia::isaac_ros::tracing::kColorWriteCommand};
   for (size_t i = 0; i < command_adapter_->get_num_outputs(); ++i) {
     const std::string name = command_adapter_->get_output_name(i);
     auto it = output_name_to_idx_.find(name);
@@ -938,6 +964,7 @@ controller_interface::return_type InferenceController::update(
       command_adapter_->write_tensor(i, outputs_[it->second]);
     }
   }
+  write_cmd_span.end();
 
   if (publish_debug_topics_) {
     publish_debug_topics();

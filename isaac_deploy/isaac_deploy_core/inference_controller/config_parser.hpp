@@ -17,6 +17,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -62,8 +63,11 @@ struct GraphConfig
     /// Feedback flow connections: "model/output" -> ["model/input", ...].
   std::unordered_map<std::string, std::vector<std::string>> feedback_flow;
 
-    /// Optional path to upstream LEAPP feedback initial values safetensors file.
+  /// Optional path to upstream LEAPP feedback initial values safetensors file.
   std::filesystem::path initial_values_path;
+
+  /// Requested graph execution frequency in Hz, when declared.
+  std::optional<double> frequency_hz;
 };
 
 /// Parse the full graph configuration from a graph-pipeline YAML config.

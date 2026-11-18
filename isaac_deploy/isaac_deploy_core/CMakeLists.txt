@@ -16,9 +16,9 @@ endif()
 
 # Find dependencies.
 find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(isaac_common REQUIRED)
 
 if("$ENV{ROS_DISTRO}" STREQUAL "lyrical")
   find_package(rcpputils REQUIRED)
@@ -63,6 +63,16 @@ if(NOT _TRITON_INC_DIR OR NOT _TRITONSERVER_SO)
   )
 endif()
 get_filename_component(_TRITON_LIB_DIR "${_TRITONSERVER_SO}" DIRECTORY)
+
+# nvtx_scope.hpp is included unconditionally and compiles to no-ops without USE_NVTX, so its
+# include path is required in both configurations; only the CUDA path is gated.
+include_directories(${isaac_common_INCLUDE_DIRS})
+option(USE_NVTX "Enable NVTX markers for improved profiling (if available)" ON)
+if(USE_NVTX)
+  find_package(CUDAToolkit REQUIRED)
+  add_definitions(-DUSE_NVTX)
+  include_directories(${CUDAToolkit_INCLUDE_DIRS})
+endif()
 
 add_library(tritonserver::tritonserver SHARED IMPORTED)
 set_target_properties(tritonserver::tritonserver PROPERTIES
@@ -405,13 +415,8 @@ install(
   DIRECTORY inference_controller/
   DESTINATION include/isaac_deploy_core/inference_controller
   FILES_MATCHING PATTERN "*.hpp"
+  PATTERN "nvtx_trace_bridge.hpp" EXCLUDE
 )
-install(
-  DIRECTORY include/isaac_deploy_core/
-  DESTINATION include/isaac_deploy_core
-  FILES_MATCHING PATTERN "*.hpp"
-)
-
 # Install test data.
 install(
   DIRECTORY test_data/
@@ -421,9 +426,9 @@ install(
 # Export targets for downstream packages.
 ament_export_targets(isaac_deploy_core_targets HAS_LIBRARY_TARGET)
 if(ISAAC_DEPLOY_USE_BUNDLED_TL_EXPECTED)
-  ament_export_dependencies(yaml-cpp rcpputils rclcpp nlohmann_json)
+  ament_export_dependencies(yaml-cpp rcpputils nlohmann_json isaac_common)
 else()
-  ament_export_dependencies(yaml-cpp tl_expected rclcpp nlohmann_json)
+  ament_export_dependencies(yaml-cpp tl_expected nlohmann_json isaac_common)
 endif()
 
 # Export LibTorch and ONNX Runtime for downstream packages.
@@ -526,12 +531,6 @@ if(BUILD_TESTING)
     BUILD_RPATH "${TORCH_INSTALL_PREFIX}/lib;${_TRITON_LIB_DIR}"
   )
 
-  # Chunk sampler test (header-only utility).
-  ament_add_gtest(test_chunk_sampler test/test_chunk_sampler.cpp)
-  target_include_directories(test_chunk_sampler PRIVATE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  )
-  ament_target_dependencies(test_chunk_sampler rclcpp)
 endif()
 
 ament_package()

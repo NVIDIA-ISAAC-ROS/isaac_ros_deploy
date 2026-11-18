@@ -25,10 +25,13 @@ DEFAULT_DISPLAYPORT_USD_URI = (
     "Isaac/6.1/Isaac/Samples/ROS2/Scenario/flexiv_displayport_insertion.usd"
 )
 
-DEFAULT_SIM_ENV: Dict[str, str] = {
-    "ROS_DISTRO": "jazzy",
+REQUIRED_SIM_ENV: Dict[str, str] = {
     "RMW_IMPLEMENTATION": "rmw_fastrtps_cpp",
     "FASTDDS_BUILTIN_TRANSPORTS": "UDPv4",
+}
+
+DEFAULT_SIM_ENV: Dict[str, str] = {
+    "ROS_DISTRO": "jazzy",
     "DISPLAYPORT_PLAY_STEP_MODE": "play",
     "DISPLAYPORT_PLAY_GRIPPER_TARGET_MODE": "finger",
     "DISPLAYPORT_PLAY_GRIPPER_EFFORT_MODE": "finger",
@@ -75,7 +78,17 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _apply_default_environment(ros_domain_id: str) -> None:
-    os.environ.setdefault("ROS_DOMAIN_ID", str(ros_domain_id))
+    os.environ["ROS_DOMAIN_ID"] = str(ros_domain_id)
+    for name, value in REQUIRED_SIM_ENV.items():
+        previous_value = os.environ.get(name)
+        if previous_value is not None and previous_value != value:
+            print(
+                "DISPLAYPORT_ISAAC_SIM_ENV_OVERRIDE "
+                f"{name}={previous_value} -> {value}",
+                flush=True,
+            )
+        os.environ[name] = value
+
     for name, value in DEFAULT_SIM_ENV.items():
         os.environ.setdefault(name, value)
 

@@ -29,8 +29,13 @@
 
 #include "triton/core/tritonserver.h"
 
+#include "isaac_common/tracing/nvtx_scope.hpp"
+#include "nvtx_trace_bridge.hpp"
+
 namespace isaac_deploy_core
 {
+
+namespace nvtx = ::nvidia::isaac_ros::tracing;
 
 namespace
 {
@@ -482,6 +487,11 @@ expected<void> TritonRunner::query_model_metadata()
 
 expected<void> TritonRunner::run(const TensorDict & inputs, TensorDict & outputs)
 {
+  // Client-side phases; the bridge's spans only cover the server side. Declared rather than
+  // brace-scoped because request_guard/input_tensors must outlive the build phase.
+  static const nvtx::RegisteredName build_name{"runner:build_request"};
+  nvtx::ScopedRange build_span{build_name, nvtx::kColorBuildRequest};
+
   // Create inference request.
   TRITONSERVER_InferenceRequest * request{nullptr};
   RETURN_TRITON_ERROR(
@@ -503,7 +513,10 @@ expected<void> TritonRunner::run(const TensorDict & inputs, TensorDict & outputs
   std::vector<torch::Tensor> input_tensors;
   input_tensors.reserve(input_names_.size());
 
-  // Add inputs.
+  // Add inputs. Separately spanned: the dtype cast and contiguous() below allocate per cycle,
+  // which is the only part of build_request whose cost scales with tensor size.
+  static const nvtx::RegisteredName input_convert_name{"runner:input_convert"};
+  nvtx::ScopedRange input_convert_span{input_convert_name, nvtx::kColorInputTerm};
   for (size_t i = 0; i < input_names_.size(); ++i) {
     const auto & input_name = input_names_[i];
     const auto it = inputs.find(input_name);
@@ -539,6 +552,7 @@ expected<void> TritonRunner::run(const TensorDict & inputs, TensorDict & outputs
         request, input_name.c_str(), tensor.data_ptr<float>(), byte_size,
         TRITONSERVER_MEMORY_CPU, 0));
   }
+  input_convert_span.end();
 
   // Request outputs.
   for (const auto & output_name : output_names_) {
@@ -560,11 +574,39 @@ expected<void> TritonRunner::run(const TensorDict & inputs, TensorDict & outputs
       request, allocator_, nullptr, InferenceComplete,
       reinterpret_cast<void *>(&response_promise)));
 
-  // Release ownership: Triton takes over the request lifecycle.
-  RETURN_TRITON_ERROR(TRITONSERVER_ServerInferAsync(server_, request_guard.release(), nullptr));
+  // Optionally attach an NVTX-bridging trace so a capture reports the server-side phase durations
+  // as payload marks instead of showing anonymous kernels.
+  TRITONSERVER_InferenceTrace * trace{nullptr};
+  if (nvtx_trace::enabled()) {
+    auto * trace_state = new nvtx_trace::TraceState{};
+    TRITONSERVER_Error * trace_err = TRITONSERVER_InferenceTraceNew(
+        &trace, TRITONSERVER_TRACE_LEVEL_TIMESTAMPS, 0 /* parent_id */,
+        nvtx_trace::activity_fn, nvtx_trace::release_fn, trace_state);
+    if (trace_err != nullptr) {
+      // Tracing is best-effort: proceed untraced rather than failing the inference.
+      TRITONSERVER_ErrorDelete(trace_err);
+      delete trace_state;
+      trace = nullptr;
+    }
+  }
 
-  // Block until the response arrives.
-  TRITONSERVER_InferenceResponse * response = response_future.get();
+  // Release ownership: Triton takes over the request lifecycle. It also unconditionally takes
+  // ownership of 'trace' (including on error), so it must not be deleted here.
+  build_span.end();
+
+  {
+    ISAAC_DEPLOY_NVTX_SCOPE("runner:submit", nvtx::kColorRunner);
+    RETURN_TRITON_ERROR(
+        TRITONSERVER_ServerInferAsync(server_, request_guard.release(), trace));
+  }
+
+  // Block until the response arrives: queue + backend execute + output extraction. The bridge's
+  // phase marks race this wake-up, so match them to triton:request, not to a client-side span.
+  TRITONSERVER_InferenceResponse * response{nullptr};
+  {
+    ISAAC_DEPLOY_NVTX_SCOPE("runner:wait_response", nvtx::kColorWaitResponse);
+    response = response_future.get();
+  }
 
   // Check for inference errors. The error is owned by the response, so do not delete it
   // separately — TRITONSERVER_InferenceResponseDelete handles cleanup.
@@ -576,6 +618,9 @@ expected<void> TritonRunner::run(const TensorDict & inputs, TensorDict & outputs
   }
 
   // Read output tensors from the response.
+  static const nvtx::RegisteredName decode_name{"runner:decode_outputs"};
+  nvtx::ScopedRange decode_span{decode_name, nvtx::kColorDecodeOutput};
+
   uint32_t output_count{0};
   TRITONSERVER_Error * count_err =
     TRITONSERVER_InferenceResponseOutputCount(response, &output_count);
@@ -619,8 +664,13 @@ expected<void> TritonRunner::run(const TensorDict & inputs, TensorDict & outputs
     outputs[std::string(name)] = torch_output;
   }
 
+  decode_span.end();
+
   // Wait for request release and clean up the response.
-  release_future.get();
+  {
+    ISAAC_DEPLOY_NVTX_SCOPE("runner:wait_release", nvtx::kColorWaitRelease);
+    release_future.get();
+  }
   TRITONSERVER_InferenceResponseDelete(response);
 
   return {};

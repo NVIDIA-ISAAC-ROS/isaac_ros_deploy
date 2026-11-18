@@ -18,8 +18,12 @@
 
 #include <utility>
 
+#include "isaac_common/tracing/nvtx_scope.hpp"
+
 namespace isaac_deploy_core
 {
+
+namespace nvtx = ::nvidia::isaac_ros::tracing;
 
 expected<OutputBuilder::Config>
 OutputBuilder::Config::create_from_model_config(const ModelConfig & model_config)
@@ -123,11 +127,15 @@ expected<void> OutputBuilder::advance(
   const TensorDict & nn_outputs,
   std::vector<NamedTensor> & outputs)
 {
-    // Build name to output map.
+    // Build name to output map. Spanned separately: this rebuilds a hash map every cycle,
+    // which the per-term ranges do not cover because they open after it.
   std::unordered_map<std::string, NamedTensor *> name_to_output;
+  static const nvtx::RegisteredName index_rebuild_name{"output:index_rebuild"};
+  nvtx::ScopedRange index_rebuild_span{index_rebuild_name, nvtx::kColorOutputTerm};
   for (auto & output : outputs) {
     name_to_output[output.name] = &output;
   }
+  index_rebuild_span.end();
 
     // Process each term.
   for (auto & term : terms_) {
@@ -147,6 +155,9 @@ expected<void> OutputBuilder::advance(
             "Output not found: " + term.name()));
     }
 
+    // Per-term range, mirroring InputBuilder, so an expensive output decode is attributable
+    // rather than hidden inside the infer:action_chunk total.
+    nvtx::ScopedRange term_span{term.name().c_str(), nvtx::kColorOutputTerm};
     auto result = term.advance(nn_it->second, *output_it->second);
     if (!result.has_value()) {
       return tl::unexpected(result.error());
@@ -211,6 +222,28 @@ std::vector<std::string> OutputBuilder::get_element_names(
     }
   }
   return {};
+}
+
+std::optional<double> OutputBuilder::get_temporal_period_seconds(
+  const std::string & output_name) const
+{
+  for (const auto & term : terms_) {
+    if (term.name() == output_name && term.temporal_period_ms().has_value()) {
+      return *term.temporal_period_ms() / 1000.0;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::size_t> OutputBuilder::get_temporal_axis(
+  const std::string & output_name) const
+{
+  for (const auto & term : terms_) {
+    if (term.name() == output_name) {
+      return term.temporal_axis();
+    }
+  }
+  return std::nullopt;
 }
 
 double OutputBuilder::get_policy_dt_seconds() const

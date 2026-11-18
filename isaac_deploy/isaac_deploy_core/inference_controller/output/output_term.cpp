@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "isaac_deploy_core/core/tensor_utils.hpp"
+#include "isaac_deploy_core/inference_controller/term_metadata.hpp"
 
 namespace isaac_deploy_core
 {
@@ -66,16 +67,13 @@ expected<OutputTermConfig> OutputTermConfig::create_from_yaml(const YAML::Node &
   }
   config.shape = yaml["shape"].as<std::vector<int64_t>>();
 
-  if (yaml["element_names"]) {
-    for (const auto & dim : yaml["element_names"]) {
-      config.element_names.push_back(dim.as<std::vector<std::string>>());
-    }
-      // Right-align element_names with shape dimensions: pad with empty lists at front.
-      // A user may omit the batch dimension.
-    while (config.element_names.size() < config.shape.size()) {
-      config.element_names.insert(config.element_names.begin(), std::vector<std::string>{});
-    }
+  auto metadata = parse_term_metadata(yaml, config.shape, "OutputTermConfig");
+  if (!metadata.has_value()) {
+    return tl::unexpected(metadata.error());
   }
+  config.element_names = std::move(metadata->element_names);
+  config.temporal_axis = metadata->temporal_axis;
+  config.temporal_period_ms = metadata->temporal_period_ms;
 
   return config;
 }

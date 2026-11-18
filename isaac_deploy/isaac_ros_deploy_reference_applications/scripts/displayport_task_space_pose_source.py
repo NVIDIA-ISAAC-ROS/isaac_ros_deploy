@@ -152,7 +152,7 @@ class DisplayPortTaskSpacePoseSource(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10,
+            depth=1,
         )
         # The offset is written once and read by a node that may start later, so
         # it has to be latched rather than best effort.
@@ -188,7 +188,7 @@ class DisplayPortTaskSpacePoseSource(Node):
                 qos,
             )
         if self.enable_topic:
-            self.create_subscription(Bool, self.enable_topic, self._enable_cb, 10)
+            self.create_subscription(Bool, self.enable_topic, self._enable_cb, 1)
 
         self._publish_tcp_offset()
 

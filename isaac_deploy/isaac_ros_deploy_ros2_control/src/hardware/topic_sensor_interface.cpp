@@ -113,7 +113,7 @@ hardware_interface::CallbackReturn TopicSensorInterface::on_activate(
 
   // Create subscription
   subscription_ = node_->create_subscription<std_msgs::msg::Float64>(
-    topic_name_, rclcpp::SystemDefaultsQoS(),
+    topic_name_, rclcpp::SystemDefaultsQoS().keep_last(1),
     std::bind(&TopicSensorInterface::topic_callback, this, std::placeholders::_1));
 
   // Create executor and start spinning thread

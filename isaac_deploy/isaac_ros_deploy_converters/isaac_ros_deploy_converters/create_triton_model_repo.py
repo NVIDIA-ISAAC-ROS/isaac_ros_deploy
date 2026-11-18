@@ -226,6 +226,22 @@ def _validate_model_backend(model_name: str, model_cfg: dict) -> None:
         )
 
 
+def _parse_pipeline_reference(
+    reference: object,
+    section: str,
+    role: str,
+) -> tuple[str, str]:
+    """Parse a pipeline connection reference in <model>/<tensor> format."""
+    parts = reference.split('/') if isinstance(reference, str) else []
+    if len(parts) != 2 or not all(parts):
+        raise ValueError(
+            f'pipeline.{section} {role} {reference!r} must use '
+            "'<model>/<tensor>' format with non-empty model and tensor names"
+        )
+
+    return parts[0], parts[1]
+
+
 def _create_model_dir(
     config_path: Path,
     model_name: str,
@@ -340,6 +356,32 @@ def create_triton_model_repo(
         unknown = ', '.join(sorted(unknown_cpu_models))
         raise ValueError(f'CPU model(s) not found in LEAPP config: {unknown}')
 
+    # Parse and validate pipeline connectivity before creating any output files.
+    graph_inputs = pipeline.get('inputs', {})
+    graph_outputs = pipeline.get('outputs', {})
+    feedback_flow = pipeline.get('feedback_flow', {})
+    data_flow = pipeline.get('data_flow', {})
+
+    feedback_source_names = set()
+    feedback_target_names = set()
+    for source_key, targets in feedback_flow.items():
+        _, source_name = _parse_pipeline_reference(
+            source_key, 'feedback_flow', 'key'
+        )
+        feedback_source_names.add(source_name)
+        for target in targets:
+            _, target_name = _parse_pipeline_reference(
+                target, 'feedback_flow', 'target'
+            )
+            feedback_target_names.add(target_name)
+
+    data_flow_source_names = {}
+    for source_key, targets in data_flow.items():
+        _, source_name = _parse_pipeline_reference(source_key, 'data_flow', 'key')
+        data_flow_source_names[source_key] = source_name
+        for target in targets:
+            _parse_pipeline_reference(target, 'data_flow', 'target')
+
     # Create per-model ONNX repos with config.pbtxt.
     dynamic_batch = False
     for model_name, model_cfg in models.items():
@@ -353,26 +395,12 @@ def create_triton_model_repo(
         ):
             dynamic_batch = True
 
-    # Parse pipeline connectivity.
-    graph_inputs = pipeline.get('inputs', {})
-    graph_outputs = pipeline.get('outputs', {})
-    feedback_flow = pipeline.get('feedback_flow', {})
-    data_flow = pipeline.get('data_flow', {})
-
     # Build name sets.
     graph_input_names = {
         name for names in graph_inputs.values() for name in names
     }
     graph_output_names = {
         name for names in graph_outputs.values() for name in names
-    }
-    feedback_target_names = {
-        t.split('/', 1)[1]
-        for targets in feedback_flow.values()
-        for t in targets
-    }
-    feedback_source_names = {
-        key.split('/', 1)[1] for key in feedback_flow
     }
 
     # Determine ensemble tensor names for data-flow connections.
@@ -381,7 +409,7 @@ def create_triton_model_repo(
     data_flow_tensor_names: dict[str, str] = {}
     data_flow_target_to_tensor: dict[str, str] = {}
     for source_key, targets in data_flow.items():
-        source_name = source_key.split('/', 1)[1]
+        source_name = data_flow_source_names[source_key]
         if source_name in graph_output_names or source_name in feedback_source_names:
             tensor_name = source_name
         else:

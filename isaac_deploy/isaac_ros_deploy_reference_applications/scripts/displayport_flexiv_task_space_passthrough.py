@@ -388,32 +388,32 @@ class DisplayPortFlexivTaskSpacePassthrough(Node):
         else:
             self.flexiv_cartesian_command_pub = None
 
-        target_subscription_depth = 1 if self.require_user_confirmation else 10
         self.create_subscription(
             PoseStamped,
             self.input_target_pose_topic,
             self._target_cb,
-            target_subscription_depth,
+            1,
         )
         if self.enable_topic:
-            self.create_subscription(Bool, self.enable_topic, self._enable_cb, 10)
+            self.create_subscription(Bool, self.enable_topic, self._enable_cb, 1)
         if self.feedback_pose_topic:
-            self.create_subscription(PoseStamped, self.feedback_pose_topic, self._feedback_cb, 10)
+            self.create_subscription(PoseStamped, self.feedback_pose_topic, self._feedback_cb, 1)
         if self.end_effector_feedback_pose_topic:
             self.create_subscription(
                 PoseStamped,
                 self.end_effector_feedback_pose_topic,
                 self._end_effector_feedback_cb,
-                10,
+                1,
             )
         if self.tcp_offset_estimator is not None:
             self.create_subscription(
                 RobotStates,
                 self.robot_states_topic,
                 self._robot_states_cb,
-                10,
+                1,
             )
         if self.pose_delta_command_topic:
+            # Confirmation consumes one raw action per target in arrival order.
             self.create_subscription(
                 CartesianPoseDeltaCommand,
                 self.pose_delta_command_topic,

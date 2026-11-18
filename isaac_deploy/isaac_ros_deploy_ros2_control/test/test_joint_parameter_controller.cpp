@@ -211,6 +211,51 @@ TEST_F(JointParameterControllerTest, RuntimeParametersDriveImpedanceCommands)
   EXPECT_DOUBLE_EQ(command_values_[9], 3.0);
 }
 
+TEST_F(JointParameterControllerTest, RuntimeNonFiniteGainsAreRejectedAtomically)
+{
+  const std::vector<std::string> joints{"joint_a"};
+  initialize(joints);
+  assign_interfaces(joints, {0.25});
+  ASSERT_EQ(
+    controller_->on_activate(rclcpp_lifecycle::State()),
+    controller_interface::CallbackReturn::SUCCESS);
+  ASSERT_TRUE(controller_->get_node()->set_parameters_atomically({
+      rclcpp::Parameter("joint.joint_a.kp", 20.0),
+      rclcpp::Parameter("joint.joint_a.kd", 2.0)}).successful);
+
+  const auto expect_rejected_atomically =
+    [this](const char * invalid_name, double invalid_value,
+    const char * valid_name, double valid_value)
+    {
+      const auto result = controller_->get_node()->set_parameters_atomically({
+        rclcpp::Parameter(invalid_name, invalid_value),
+        rclcpp::Parameter(valid_name, valid_value)});
+      EXPECT_FALSE(result.successful);
+      EXPECT_DOUBLE_EQ(
+        controller_->get_node()->get_parameter("joint.joint_a.kp").as_double(), 20.0);
+      EXPECT_DOUBLE_EQ(
+        controller_->get_node()->get_parameter("joint.joint_a.kd").as_double(), 2.0);
+      EXPECT_EQ(
+        controller_->update(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.01)),
+        controller_interface::return_type::OK);
+      EXPECT_DOUBLE_EQ(command_values_[3], 20.0);
+      EXPECT_DOUBLE_EQ(command_values_[4], 2.0);
+    };
+
+  expect_rejected_atomically(
+    "joint.joint_a.kp", std::numeric_limits<double>::quiet_NaN(),
+    "joint.joint_a.kd", 3.0);
+  expect_rejected_atomically(
+    "joint.joint_a.kp", std::numeric_limits<double>::infinity(),
+    "joint.joint_a.kd", 3.0);
+  expect_rejected_atomically(
+    "joint.joint_a.kd", std::numeric_limits<double>::quiet_NaN(),
+    "joint.joint_a.kp", 30.0);
+  expect_rejected_atomically(
+    "joint.joint_a.kd", std::numeric_limits<double>::infinity(),
+    "joint.joint_a.kp", 30.0);
+}
+
 TEST_F(JointParameterControllerTest, ActivationSeedsPositionTargetsFromMeasuredState)
 {
   const std::vector<std::string> joints{"joint_a", "joint_b"};
@@ -249,6 +294,64 @@ TEST_F(JointParameterControllerTest, ActivationRejectsMeasuredStateOutsideSafeRa
     controller_interface::return_type::ERROR);
 }
 
+TEST_F(JointParameterControllerTest, ActivationRejectsZeroKpWhenPositiveGainsAreRequired)
+{
+  ASSERT_EQ(
+    configure_with_overrides({
+      rclcpp::Parameter("joints", std::vector<std::string>{"joint_a"}),
+      rclcpp::Parameter("default_kp", 0.0),
+      rclcpp::Parameter("default_kd", 1.0),
+      rclcpp::Parameter("require_positive_gains", true)}),
+    controller_interface::CallbackReturn::SUCCESS);
+  assign_interfaces({"joint_a"}, {0.25});
+
+  EXPECT_EQ(
+    controller_->on_activate(rclcpp_lifecycle::State()),
+    controller_interface::CallbackReturn::ERROR);
+}
+
+TEST_F(JointParameterControllerTest, ActivationRejectsZeroKdWhenPositiveGainsAreRequired)
+{
+  ASSERT_EQ(
+    configure_with_overrides({
+      rclcpp::Parameter("joints", std::vector<std::string>{"joint_a"}),
+      rclcpp::Parameter("default_kp", 1.0),
+      rclcpp::Parameter("default_kd", 0.0),
+      rclcpp::Parameter("require_positive_gains", true)}),
+    controller_interface::CallbackReturn::SUCCESS);
+  assign_interfaces({"joint_a"}, {0.25});
+
+  EXPECT_EQ(
+    controller_->on_activate(rclcpp_lifecycle::State()),
+    controller_interface::CallbackReturn::ERROR);
+}
+
+TEST_F(JointParameterControllerTest, PositiveGainPolicyRejectsRuntimeZeroGains)
+{
+  ASSERT_EQ(
+    configure_with_overrides({
+      rclcpp::Parameter("joints", std::vector<std::string>{"joint_a"}),
+      rclcpp::Parameter("default_kp", 0.0),
+      rclcpp::Parameter("default_kd", 0.0),
+      rclcpp::Parameter("require_positive_gains", true)}),
+    controller_interface::CallbackReturn::SUCCESS);
+
+  EXPECT_TRUE(controller_->get_node()->set_parameters_atomically({
+      rclcpp::Parameter("joint.joint_a.kp", 1.0),
+      rclcpp::Parameter("joint.joint_a.kd", 1.0)}).successful);
+  const auto zero_kp_result = controller_->get_node()->set_parameter(
+    rclcpp::Parameter("joint.joint_a.kp", 0.0));
+  const auto zero_kd_result = controller_->get_node()->set_parameter(
+    rclcpp::Parameter("joint.joint_a.kd", 0.0));
+
+  EXPECT_FALSE(zero_kp_result.successful);
+  EXPECT_FALSE(zero_kd_result.successful);
+  EXPECT_DOUBLE_EQ(
+    controller_->get_node()->get_parameter("joint.joint_a.kp").as_double(), 1.0);
+  EXPECT_DOUBLE_EQ(
+    controller_->get_node()->get_parameter("joint.joint_a.kd").as_double(), 1.0);
+}
+
 TEST_F(JointParameterControllerTest, ConfigurationRejectsDuplicateJointNames)
 {
   EXPECT_EQ(
@@ -263,6 +366,24 @@ TEST_F(JointParameterControllerTest, ConfigurationRejectsNonFiniteGain)
     configure_with_overrides({
       rclcpp::Parameter("joints", std::vector<std::string>{"joint_a"}),
       rclcpp::Parameter("default_kp", std::numeric_limits<double>::quiet_NaN())}),
+    controller_interface::CallbackReturn::ERROR);
+}
+
+TEST_F(JointParameterControllerTest, ConfigurationRejectsNonFinitePerJointKp)
+{
+  EXPECT_EQ(
+    configure_with_overrides({
+      rclcpp::Parameter("joints", std::vector<std::string>{"joint_a"}),
+      rclcpp::Parameter("joint.joint_a.kp", std::numeric_limits<double>::quiet_NaN())}),
+    controller_interface::CallbackReturn::ERROR);
+}
+
+TEST_F(JointParameterControllerTest, ConfigurationRejectsNonFinitePerJointKd)
+{
+  EXPECT_EQ(
+    configure_with_overrides({
+      rclcpp::Parameter("joints", std::vector<std::string>{"joint_a"}),
+      rclcpp::Parameter("joint.joint_a.kd", std::numeric_limits<double>::infinity())}),
     controller_interface::CallbackReturn::ERROR);
 }
 

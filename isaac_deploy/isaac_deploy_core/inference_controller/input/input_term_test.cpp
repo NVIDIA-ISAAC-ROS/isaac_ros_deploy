@@ -38,6 +38,47 @@ TEST(InputTermTest, CreateFailsWithEmptyName) {
     EXPECT_FALSE(result.has_value());
 }
 
+TEST(InputTermTest, ParsesLeappTemporalAxis) {
+    auto yaml = YAML::Load(
+      R"(
+      name: observation_history
+      shape: [1, 4, 3]
+      element_names:
+      - __temporal_axis__
+      - [hip, knee, ankle]
+      temporal_period_ms: 20
+    )");
+    auto result = InputTermConfig::create_from_yaml(yaml);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->element_names[1].empty());
+    EXPECT_EQ(result->element_names[2], std::vector<std::string>({"hip", "knee", "ankle"}));
+}
+
+TEST(InputTermTest, IgnoresUnusedIncompleteLeappTemporalMetadata) {
+    auto yaml = YAML::Load(
+      R"(
+      name: observation_history
+      shape: [1, 4, 3]
+      element_names: [__temporal_axis__, [hip, knee, ankle]]
+    )");
+    auto result = InputTermConfig::create_from_yaml(yaml);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->element_names[1].empty());
+}
+
+TEST(InputTermTest, IgnoresUnusedInvalidTemporalPeriod) {
+    auto yaml = YAML::Load(
+      R"(
+      name: observation_history
+      shape: [1, 4, 3]
+      element_names: [__temporal_axis__, [hip, knee, ankle]]
+      temporal_period_ms: invalid
+    )");
+    auto result = InputTermConfig::create_from_yaml(yaml);
+    ASSERT_TRUE(result.has_value());
+    EXPECT_TRUE(result->element_names[1].empty());
+}
+
 TEST(InputTermTest, EmptyKindDefaultsSourceToName) {
     InputTermConfig config {.name = "name", .kind = "", .shape = {1, 3}};
     auto result = InputTerm::create(config);

@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
@@ -25,6 +26,7 @@
 #include "rclcpp_components/register_node_macro.hpp"
 
 #include "isaac_deploy_core/inference_controller/config_parser.hpp"
+#include "isaac_common/tracing/nvtx_scope.hpp"
 #include "isaac_deploy_core/inference_controller/safetensors_loader.hpp"
 #include "isaac_ros_deploy_converters/converters/message_to_tensor_converter_nodes.hpp"
 #include "isaac_ros_deploy_converters/utils/tensor_list_utils.hpp"
@@ -60,7 +62,7 @@ InputBuilderNode::InputBuilderNode(const rclcpp::NodeOptions & options)
     });
 
   declare_parameter<std::string>("config_path", "");
-  declare_parameter<double>("publish_rate", 50.0);
+  declare_parameter<double>("publish_rate", 0.0);
   declare_parameter<std::string>("output_topic", "input_tensors");
   declare_parameter<std::string>("enable_topic", "");
   declare_parameter<bool>("enabled_on_start", true);
@@ -92,6 +94,14 @@ void InputBuilderNode::configure()
   if (!graph_result) {
     throw std::runtime_error(
       "Failed to parse config: " + graph_result.error().message);
+  }
+
+  // A positive parameter overrides bundle frequency. Zero explicitly requests automatic cadence.
+  const bool use_automatic_cadence = std::fpclassify(publish_rate_) == FP_ZERO;
+  const bool use_graph_frequency =
+    use_automatic_cadence && graph_result->frequency_hz.has_value();
+  if (use_automatic_cadence) {
+    publish_rate_ = graph_result->frequency_hz.value_or(50.0);
   }
 
   auto model_config_result = isaac_deploy_core::merge_graph_to_model_config(*graph_result, config);
@@ -183,14 +193,23 @@ void InputBuilderNode::configure()
     create_publisher<isaac_ros_tensor_msgs::msg::TensorList>(output_topic, 10);
   RCLCPP_INFO(get_logger(), "Publishing bundled TensorList on '%s'", output_topic.c_str());
 
-  if (publish_rate_ <= 0.0) {
+  if (!std::isfinite(publish_rate_) || publish_rate_ <= 0.0) {
     throw std::runtime_error("InputBuilderNode: publish_rate must be positive");
+  }
+  const auto timer_period = std::chrono::duration<double>(1.0 / publish_rate_);
+  if (timer_period < std::chrono::nanoseconds(1) ||
+    timer_period > std::chrono::nanoseconds::max())
+  {
+    const std::string source = use_graph_frequency ?
+      "pipeline.configs.frequency" : "publish_rate";
+    throw std::runtime_error(
+            "InputBuilderNode: " + source + " is outside the supported timer range");
   }
 
   const auto enable_topic = get_parameter("enable_topic").as_string();
   if (!enable_topic.empty()) {
     enable_sub_ = create_subscription<std_msgs::msg::Bool>(
-      enable_topic, 10,
+      enable_topic, 1,
       std::bind(&InputBuilderNode::enable_callback, this, std::placeholders::_1));
     RCLCPP_INFO(
       get_logger(), "Gating publication on '%s' (enabled_on_start=%s)",
@@ -210,7 +229,7 @@ void InputBuilderNode::configure()
   const auto feedback_reset_topic = get_parameter("feedback_reset_topic").as_string();
   if (!feedback_reset_topic.empty()) {
     feedback_reset_sub_ = create_subscription<std_msgs::msg::Empty>(
-      feedback_reset_topic, 10,
+      feedback_reset_topic, 1,
       [this](const std_msgs::msg::Empty::SharedPtr) {
         reset_feedback("reset requested on the feedback reset topic");
       });
@@ -218,8 +237,7 @@ void InputBuilderNode::configure()
       get_logger(), "Listening for feedback resets on '%s'", feedback_reset_topic.c_str());
   }
 
-  const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(
-    std::chrono::duration<double>(1.0 / publish_rate_));
+  const auto period = std::chrono::duration_cast<std::chrono::nanoseconds>(timer_period);
   timer_ = rclcpp::create_timer(
     this,
     get_clock(),
@@ -329,12 +347,16 @@ void InputBuilderNode::create_subscription_groups(
 
     auto callback = [this, grp = group.get()](std::shared_ptr<rclcpp::SerializedMessage> msg) {
         std::lock_guard<std::mutex> lock(grp->mutex);
+        ++grp->received;
         grp->latest_msg = msg;
         grp->receive_time = now();
       };
 
+    group->mark_received = "in:" + topic + ":received";
+    group->mark_latch_age = "in:" + topic + ":latch_age_ns";
+
     group->subscription = create_generic_subscription(
-      topic, group->message_type, rclcpp::QoS(10), callback);
+      topic, group->message_type, rclcpp::QoS(1), callback);
 
     std::string names_str;
     for (const auto & entry : group->converters) {
@@ -352,6 +374,10 @@ void InputBuilderNode::create_subscription_groups(
 
 void InputBuilderNode::timer_callback()
 {
+  // Envelope for the GR00T input cycle. This node runs outside the ros2_control loop, so without
+  // it the NitrosTensorList conversions it drives are unattributable in a capture.
+  ISAAC_DEPLOY_NVTX_SCOPE("gr00t:input_cycle", nvidia::isaac_ros::tracing::kColorUpdate);
+
   const rclcpp::Time current_stamp = now();
 
   // Convert messages from all subscription groups.
@@ -360,9 +386,24 @@ void InputBuilderNode::timer_callback()
 
   for (auto & group : subscription_groups_) {
     std::shared_ptr<rclcpp::SerializedMessage> msg;
+    uint64_t received = 0;
+    rclcpp::Time received_at{0, 0, RCL_ROS_TIME};
     {
       std::lock_guard<std::mutex> lock(group->mutex);
       msg = group->latest_msg;
+      received = group->received;
+      received_at = group->receive_time;
+    }
+
+    // Per-input staleness and drop rate. The delta in received between consecutive builds is how
+    // many messages arrived for the one that was used; anything above 1 was discarded unseen.
+    if (msg && nvidia::isaac_ros::tracing::enabled()) {
+      nvidia::isaac_ros::tracing::mark_u64(group->mark_received.c_str(), received);
+      const auto latch_age = current_stamp - received_at;
+      if (latch_age.nanoseconds() > 0) {
+        nvidia::isaac_ros::tracing::mark_u64(
+          group->mark_latch_age.c_str(), static_cast<uint64_t>(latch_age.nanoseconds()));
+      }
     }
 
     if (!msg) {
@@ -488,6 +529,13 @@ void InputBuilderNode::timer_callback()
   // Build a single TensorList with all model inputs.
   isaac_ros_tensor_msgs::msg::TensorList msg;
   msg.header.stamp = current_stamp;
+
+  // torch -> ROS marshalling then publish. Payload is current_stamp in ns: the pipeline's
+  // correlation key is MINTED here and rides msg.header.stamp through the rest of the chain.
+  static const nvidia::isaac_ros::tracing::RegisteredName publish_name{"gr00t:input_publish"};
+  const nvidia::isaac_ros::tracing::ScopedRange publish_span{
+    publish_name, nvidia::isaac_ros::tracing::kColorOutputTerm,
+    static_cast<uint64_t>(current_stamp.nanoseconds())};
 
   for (const auto & [name, tensor] : nn_inputs_) {
     msg.names.push_back(name);
